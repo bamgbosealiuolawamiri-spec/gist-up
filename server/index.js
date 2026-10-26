@@ -301,7 +301,7 @@ async function start() {
       await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT");
       await pool.query(`
         UPDATE users
-        SET username = COALESCE(NULLIF(lower(regexp_replace(split_part(email, '@', 1), '[^a-z0-9_]', '', 'g')), ''), 'member') || id::text
+        SET username = left(COALESCE(NULLIF(lower(regexp_replace(split_part(email, '@', 1), '[^a-z0-9_]', '', 'g')), ''), 'member'), greatest(1, 30 - length(id::text))) || id::text
         WHERE username IS NULL OR username = ''
       `);
       await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users (username)");
