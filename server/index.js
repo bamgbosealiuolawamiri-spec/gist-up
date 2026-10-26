@@ -328,7 +328,7 @@ app.get("/api/conversations", authenticate, async (req, res) => {
 
 app.post("/api/conversations", authenticate, async (req, res) => {
   const otherId = String(req.body?.userId || "");
-  if (!/^\\d+$/.test(otherId) || otherId === String(req.user.id)) {
+  if (!/^\d+$/.test(otherId) || otherId === String(req.user.id)) {
     return res.status(400).json({ error: "Choose another registered user to start a conversation." });
   }
   try {
