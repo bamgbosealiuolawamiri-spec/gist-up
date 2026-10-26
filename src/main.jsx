@@ -109,13 +109,23 @@ function App() {
     if (authMode === "signup" && !fullName.trim()) { setAuthError("Enter your full name."); return; }
     if (password.length < 8) { setAuthError("Your password must be at least 8 characters."); return; }
     setAuthBusy(true);
+    setAuthError("Connecting to Gist Up account service…");
+    let timeoutId;
     try {
+      const authRequest = authMode === "signup"
+        ? supabase.auth.signUp({
+            email: email.trim().toLowerCase(), password,
+            options: { data: { full_name: fullName.trim() } }
+          })
+        : supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
+      const timeoutRequest = new Promise((_, reject) => {
+        timeoutId = window.setTimeout(() => reject(new Error("The account service did not respond after 12 seconds. Check your connection and try again. If this continues, the Supabase project settings need checking.")), 12000);
+      });
+      const { data, error } = await Promise.race([authRequest, timeoutRequest]);
+      window.clearTimeout(timeoutId);
+      setAuthError("");
+      if (error) throw error;
       if (authMode === "signup") {
-        const { data, error } = await supabase.auth.signUp({
-          email: email.trim().toLowerCase(), password,
-          options: { data: { full_name: fullName.trim() } }
-        });
-        if (error) throw error;
         if (data.session) {
           setAuthUser(data.user);
           setDisplayName(fullName.trim());
@@ -126,8 +136,6 @@ function App() {
           setAuthError("Account created. Check your email for a confirmation link, then log in.");
         }
       } else {
-        const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
-        if (error) throw error;
         setAuthUser(data.user);
         setDisplayName(data.user.user_metadata?.full_name || data.user.email?.split("@")[0] || "Your profile");
         setHandle("@" + data.user.email.split("@")[0].toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0,24));
@@ -136,7 +144,10 @@ function App() {
       }
     } catch (error) {
       setAuthError(error?.message || "We couldn't complete sign-in. Please try again.");
-    } finally { setAuthBusy(false); }
+    } finally {
+      if (timeoutId) window.clearTimeout(timeoutId);
+      setAuthBusy(false);
+    }
   }
 
   async function signOut() {
