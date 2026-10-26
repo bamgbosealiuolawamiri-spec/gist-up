@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { Home, Compass, Users, MessageCircle, Bell, Bookmark, Settings, Plus, Search, Heart, MessageSquare, Repeat2, Send, Sparkles, Image as ImageIcon, Smile, Menu, X, ArrowRight, TrendingUp, MoreHorizontal, UserRound, ShieldCheck, SlidersHorizontal, Hash, Mail, Lock, Eye, EyeOff, ChevronRight, Check, Paperclip, SmilePlus, BarChart3, Megaphone, WandSparkles, CircleHelp, LogOut, Globe2, Moon, Shield, Trash2, Archive, Ban, Camera, Pencil, Share2, Flame, Clock, UserPlus, FileText, Bot, ArrowUpRight } from "lucide-react";
 import "./index.css";
 
+const API_BASE = "https://gist-up-api.onrender.com";
+
 const seedPosts = [
   { id: 1, name: "Maya Johnson", handle: "@mayaj", time: "18 min ago", initials: "MJ", tone: "lavender", text: "Small reminder: your progress doesn't have to look like anyone else's. Keep showing up for the things that matter to you. 💜", likes: 128, comments: 24, topic: "Lifestyle" },
   { id: 2, name: "Daniel Okafor", handle: "@dancreates", time: "42 min ago", initials: "DO", tone: "peach", text: "Working on a new creative project this week. What's one thing you're learning right now?", likes: 86, comments: 17, topic: "Creators" },
@@ -73,8 +75,8 @@ function App() {
   async function loadAppData(fallbackUser = null) {
     try {
       const [profileResponse, postsResponse] = await Promise.all([
-        fetch("/api/profile/me", { credentials: "same-origin" }),
-        fetch("/api/posts", { credentials: "same-origin" })
+        fetch(API_BASE + "/api/profile/me", { credentials: "include" }),
+        fetch(API_BASE + "/api/posts", { credentials: "include" })
       ]);
       let user = fallbackUser;
       if (profileResponse.ok) {
@@ -100,7 +102,7 @@ function App() {
 
   useEffect(() => {
     let mounted = true;
-    fetch("/api/auth/me", { credentials: "same-origin" })
+    fetch(API_BASE + "/api/auth/me", { credentials: "include" })
       .then(async response => response.ok ? (await response.json()).user : null)
       .then(async user => {
         if (!mounted || !user) return;
@@ -138,9 +140,9 @@ function App() {
     setAuthBusy(true);
     setAuthError("Connecting to Gist Up account service…");
     try {
-      const response = await fetch(authMode === "signup" ? "/api/auth/signup" : "/api/auth/login", {
+      const response = await fetch(API_BASE + (authMode === "signup" ? "/api/auth/signup" : "/api/auth/login"), {
         method: "POST",
-        credentials: "same-origin",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fullName: fullName.trim(), email: email.trim().toLowerCase(), password })
       });
@@ -164,7 +166,7 @@ function App() {
 
   async function signOut() {
     try {
-      await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+      await fetch(API_BASE + "/api/auth/logout", { method: "POST", credentials: "include" });
     } catch {}
     setAuthUser(null);
     setAuthMode("welcome");
@@ -178,9 +180,9 @@ function App() {
     if (!content || postBusy) return;
     setPostBusy(true);
     try {
-      const response = await fetch("/api/posts", {
+      const response = await fetch(API_BASE + "/api/posts", {
         method: "POST",
-        credentials: "same-origin",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content })
       });
@@ -202,9 +204,9 @@ function App() {
   async function saveProfile() {
     const cleanHandle = handle.trim().replace(/^@+/, "");
     try {
-      const response = await fetch("/api/profile/me", {
+      const response = await fetch(API_BASE + "/api/profile/me", {
         method: "PATCH",
-        credentials: "same-origin",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fullName: displayName, username: cleanHandle, bio: profileBio })
       });
@@ -225,7 +227,7 @@ function App() {
   function toggleFollow(person) { setFollowing(old => old.includes(person.handle) ? old.filter(x => x !== person.handle) : [...old, person.handle]); }
   async function loadConversations(archivedOverride = showArchived, preferredConversationId = null) {
     try {
-      const response = await fetch("/api/conversations?archived=" + String(archivedOverride), { credentials: "same-origin" });
+      const response = await fetch(API_BASE + "/api/conversations?archived=" + String(archivedOverride), { credentials: "include" });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "We couldn't load your conversations.");
       const items = Array.isArray(result.conversations) ? result.conversations : [];
@@ -246,7 +248,7 @@ function App() {
   async function loadThread(conversationId) {
     if (!conversationId) { setThreadMessages([]); return; }
     try {
-      const response = await fetch("/api/conversations/" + encodeURIComponent(conversationId) + "/messages", { credentials: "same-origin" });
+      const response = await fetch(API_BASE + "/api/conversations/" + encodeURIComponent(conversationId) + "/messages", { credentials: "include" });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "We couldn't load this conversation.");
       setThreadMessages(Array.isArray(result.messages) ? result.messages : []);
@@ -257,9 +259,9 @@ function App() {
 
   async function startConversation(user) {
     try {
-      const response = await fetch("/api/conversations", {
+      const response = await fetch(API_BASE + "/api/conversations", {
         method: "POST",
-        credentials: "same-origin",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: user.id })
       });
@@ -282,9 +284,9 @@ function App() {
     if (!content || !activeConversationId || messageBusy) return;
     setMessageBusy(true);
     try {
-      const response = await fetch("/api/conversations/" + encodeURIComponent(activeConversationId) + "/messages", {
+      const response = await fetch(API_BASE + "/api/conversations/" + encodeURIComponent(activeConversationId) + "/messages", {
         method: "POST",
-        credentials: "same-origin",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content })
       });
@@ -302,7 +304,7 @@ function App() {
   async function searchMessageUsers(value) {
     if (value.trim().length < 2) { setMessageUserResults([]); return; }
     try {
-      const response = await fetch("/api/users?search=" + encodeURIComponent(value.trim()), { credentials: "same-origin" });
+      const response = await fetch(API_BASE + "/api/users?search=" + encodeURIComponent(value.trim()), { credentials: "include" });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "Account search failed.");
       setMessageUserResults(Array.isArray(result.users) ? result.users : []);
@@ -313,9 +315,9 @@ function App() {
 
   async function toggleConversationArchive(conversationId, archive) {
     try {
-      const response = await fetch("/api/conversations/" + encodeURIComponent(conversationId) + "/archive", {
+      const response = await fetch(API_BASE + "/api/conversations/" + encodeURIComponent(conversationId) + "/archive", {
         method: "PATCH",
-        credentials: "same-origin",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ archived: archive })
       });
