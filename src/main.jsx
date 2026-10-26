@@ -24,11 +24,6 @@ const spaces = [
   { name: "Ads Manager", icon: Megaphone, desc: "Plan and review promotional campaigns." },
   { name: "Settings & Privacy", icon: Settings, desc: "Manage your account and preferences." }
 ];
-const conversations = [
-  { name: "Nia Carter", handle: "@niacreates", initials: "NC", tone: "lavender", message: "That idea sounds amazing!", time: "2m", unread: true },
-  { name: "Tobi Adeyemi", handle: "@tobiwrites", initials: "TA", tone: "mint", message: "Sent you the draft ✨", time: "1h", unread: true },
-  { name: "Leah Morgan", handle: "@leahm", initials: "LM", tone: "peach", message: "Thank you so much!", time: "Yesterday", unread: false }
-];
 function Avatar({ initials, tone = "lavender", size = "" }) { return <div className={"avatar " + tone + " " + size}>{initials}</div>; }
 function App() {
   const [active, setActive] = useState("Home");
@@ -44,9 +39,15 @@ function App() {
   const [mobileNav, setMobileNav] = useState(false);
   const [notice, setNotice] = useState("");
   const [query, setQuery] = useState("");
-  const [messageActive, setMessageActive] = useState(0);
+  const [conversations, setConversations] = useState([]);
+  const [activeConversationId, setActiveConversationId] = useState(null);
+  const [threadMessages, setThreadMessages] = useState([]);
   const [messageDraft, setMessageDraft] = useState("");
-  const [messages, setMessages] = useState({});
+  const [messageSearch, setMessageSearch] = useState("");
+  const [messageUserResults, setMessageUserResults] = useState([]);
+  const [showNewMessage, setShowNewMessage] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [messageBusy, setMessageBusy] = useState(false);
   const [settingsTab, setSettingsTab] = useState("Account");
   const [authMode, setAuthMode] = useState("welcome");
   const [email, setEmail] = useState("");
@@ -59,7 +60,6 @@ function App() {
   const [assistantReply, setAssistantReply] = useState("");
   const [communityJoined, setCommunityJoined] = useState([]);
   const [blocked, setBlocked] = useState([]);
-  const [archived, setArchived] = useState([]);
   const [profileBio, setProfileBio] = useState("Your story starts here. Add a bio and let people get to know you.");
   const [editProfile, setEditProfile] = useState(false);
   const [displayName, setDisplayName] = useState("Your profile");
@@ -111,6 +111,24 @@ function App() {
       .catch(() => {});
     return () => { mounted = false; };
   }, []);
+
+
+  useEffect(() => {
+    if (authUser && active === "Messages") loadConversations();
+  }, [authUser, active, showArchived]);
+
+  useEffect(() => {
+    if (!authUser || active !== "Messages" || !activeConversationId) return;
+    loadThread(activeConversationId);
+    const timer = window.setInterval(() => loadThread(activeConversationId), 5000);
+    return () => window.clearInterval(timer);
+  }, [authUser, active, activeConversationId]);
+
+  useEffect(() => {
+    if (!showNewMessage) { setMessageUserResults([]); return; }
+    const timer = window.setTimeout(() => searchMessageUsers(messageSearch), 250);
+    return () => window.clearTimeout(timer);
+  }, [showNewMessage, messageSearch]);
 
   async function submitAuth() {
     setAuthError("");
@@ -205,11 +223,107 @@ function App() {
   }
   function go(label) { setActive(label); setMobileNav(false); }
   function toggleFollow(person) { setFollowing(old => old.includes(person.handle) ? old.filter(x => x !== person.handle) : [...old, person.handle]); }
-  function sendMessage() {
-    if (!messageDraft.trim()) return;
-    const key = conversations[messageActive].handle;
-    setMessages(old => ({ ...old, [key]: [...(old[key] || []), { from: "You", text: messageDraft.trim(), time: "Now" }] }));
-    setMessageDraft("");
+  async function loadConversations() {
+    try {
+      const response = await fetch("/api/conversations?archived=" + String(showArchived), { credentials: "same-origin" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "We couldn't load your conversations.");
+      const items = Array.isArray(result.conversations) ? result.conversations : [];
+      setConversations(items);
+      if (activeConversationId && !items.some(item => String(item.id) === String(activeConversationId))) {
+        setActiveConversationId(items.length ? items[0].id : null);
+      } else if (!activeConversationId && items.length && !showArchived) {
+        setActiveConversationId(items[0].id);
+      }
+    } catch (error) {
+      notify(error?.message || "We couldn't load your conversations.");
+    }
+  }
+
+  async function loadThread(conversationId) {
+    if (!conversationId) { setThreadMessages([]); return; }
+    try {
+      const response = await fetch("/api/conversations/" + encodeURIComponent(conversationId) + "/messages", { credentials: "same-origin" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "We couldn't load this conversation.");
+      setThreadMessages(Array.isArray(result.messages) ? result.messages : []);
+    } catch (error) {
+      notify(error?.message || "We couldn't load this conversation.");
+    }
+  }
+
+  async function startConversation(user) {
+    try {
+      const response = await fetch("/api/conversations", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: user.id })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "We couldn't start that conversation.");
+      setShowArchived(false);
+      setShowNewMessage(false);
+      setMessageSearch("");
+      setActiveConversationId(result.conversationId);
+      setActive("Messages");
+      await loadConversations();
+      await loadThread(result.conversationId);
+    } catch (error) {
+      notify(error?.message || "We couldn't start that conversation.");
+    }
+  }
+
+  async function sendMessage() {
+    const content = messageDraft.trim();
+    if (!content || !activeConversationId || messageBusy) return;
+    setMessageBusy(true);
+    try {
+      const response = await fetch("/api/conversations/" + encodeURIComponent(activeConversationId) + "/messages", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "We couldn't send that message.");
+      setMessageDraft("");
+      await Promise.all([loadThread(activeConversationId), loadConversations()]);
+    } catch (error) {
+      notify(error?.message || "We couldn't send that message.");
+    } finally {
+      setMessageBusy(false);
+    }
+  }
+
+  async function searchMessageUsers(value) {
+    if (value.trim().length < 2) { setMessageUserResults([]); return; }
+    try {
+      const response = await fetch("/api/users?search=" + encodeURIComponent(value.trim()), { credentials: "same-origin" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Account search failed.");
+      setMessageUserResults(Array.isArray(result.users) ? result.users : []);
+    } catch (error) {
+      notify(error?.message || "Account search failed.");
+    }
+  }
+
+  async function toggleConversationArchive(conversationId, archive) {
+    try {
+      const response = await fetch("/api/conversations/" + encodeURIComponent(conversationId) + "/archive", {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archived: archive })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "We couldn't update that conversation.");
+      setActiveConversationId(null);
+      await loadConversations();
+      notify(archive ? "Conversation archived." : "Conversation restored to your inbox.");
+    } catch (error) {
+      notify(error?.message || "We couldn't update that conversation.");
+    }
   }
   const filteredPeople = useMemo(() => people.filter(p => (p.name + " " + p.handle + " " + p.bio).toLowerCase().includes(query.toLowerCase())), [query]);
   const myInitials = displayName.split(/\s+/).map(x => x[0]).join("").slice(0,2).toUpperCase() || "YO";
@@ -256,9 +370,31 @@ function App() {
     return <div className="screen-stack"><section className="feature-panel"><div><span className="welcome-pill"><Users size={13}/> FIND YOUR PEOPLE</span><h2>Belong to something good.</h2><p>Join spaces where you can share, learn, and feel at home.</p></div><Users size={54}/></section><div className="section-title"><h2>Communities to explore</h2><button className="outline-button compact" onClick={()=>notify("Community creation will be available after account and server setup.")}><Plus size={15}/> Create community</button></div><div className="community-grid">{groups.map(([name,desc,count,initials,tone])=><article className="community-card" key={name}><div className={"community-art "+tone}><Avatar initials={initials} tone={tone} size="large"/></div><div className="community-card-body"><h3>{name}</h3><p>{desc}</p><span><Users size={14}/> {count}</span><button className={communityJoined.includes(name)?"outline-button":"primary-button"} onClick={()=>setCommunityJoined(old=>old.includes(name)?old.filter(x=>x!==name):[...old,name])}>{communityJoined.includes(name)?<><Check size={15}/> Joined</>:<>Join community <ArrowRight size={15}/></>}</button></div></article>)}</div></div>;
   }
   function MessagesPage() {
-    const current=conversations[messageActive];
-    const thread=[{from:current.name,text:"Hey! I saw your post and wanted to say I really liked your perspective.",time:"10:24 AM"},{from:"You",text:"Thank you! I appreciate you taking the time to read it.",time:"10:29 AM"},{from:current.name,text:current.message,time:current.time},...(messages[current.handle]||[])];
-    return <div className="messages-layout"><section className="message-list-panel"><div className="message-list-head"><h2>Chats</h2><button className="icon-button" onClick={()=>notify("New message search will be connected to accounts.")}><Pencil size={17}/></button></div><div className="search-small"><Search size={16}/><input placeholder="Search messages"/></div><div className="message-filters"><button className="tab-active">All</button><button onClick={()=>setArchived(old=>old.length?[]:conversations.map(c=>c.handle))}>Archived</button></div>{conversations.filter(c=>!archived.includes(c.handle)).map((c,i)=><button className={"conversation-row "+(messageActive===i?"conversation-active":"")} key={c.handle} onClick={()=>setMessageActive(i)}><Avatar initials={c.initials} tone={c.tone}/><span className="conversation-copy"><strong>{c.name}</strong><small>{c.message}</small></span><span className="conversation-meta"><small>{c.time}</small>{c.unread&&<i/>}</span></button>)}</section><section className="chat-panel"><div className="chat-head"><Avatar initials={current.initials} tone={current.tone}/><div><strong>{current.name}</strong><span>{current.handle}</span></div><button className="icon-button" onClick={()=>notify("Conversation options: block and archive are available in Settings & Privacy.")}><MoreHorizontal size={20}/></button></div><div className="chat-history"><div className="chat-date">TODAY</div>{thread.map((m,i)=><div className={"chat-message "+(m.from==="You"?"mine":"")} key={i}><p>{m.text}</p><small>{m.time}</small></div>)}</div><div className="chat-compose"><button className="icon-button" onClick={()=>notify("Attachments are not enabled in this preview.")}><Paperclip size={18}/></button><input value={messageDraft} onChange={e=>setMessageDraft(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendMessage()} placeholder="Write a message…"/><button className="icon-button" onClick={()=>notify("Emoji picker will be added later.")}><SmilePlus size={18}/></button><button className="primary-button send-message" onClick={sendMessage} disabled={!messageDraft.trim()}><Send size={16}/></button></div><p className="preview-note chat-note">Preview messages stay in this browser session and are not delivered to real accounts.</p></section></div>;
+    const current = conversations.find(c => String(c.id) === String(activeConversationId));
+    const visibleConversations = conversations.filter(c => {
+      const text = [c.full_name, c.username, c.last_message || ""].join(" ").toLowerCase();
+      return text.includes(messageSearch.toLowerCase());
+    });
+    const initialsFor = name => String(name || "?").split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase();
+    const formatTime = value => value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+    return <div className="messages-layout">
+      <section className="message-list-panel">
+        <div className="message-list-head"><h2>Chats</h2><button className={"icon-button "+(showNewMessage?"tab-active":"")} aria-label="New message" onClick={() => { setShowNewMessage(old => !old); setMessageSearch(""); }}><Pencil size={17}/></button></div>
+        <div className="search-small"><Search size={16}/><input value={messageSearch} onChange={e => setMessageSearch(e.target.value)} placeholder={showNewMessage ? "Search registered accounts" : "Search conversations"}/></div>
+        <div className="message-filters"><button className={!showArchived?"tab-active":""} onClick={() => { setShowArchived(false); setActiveConversationId(null); }}>All</button><button className={showArchived?"tab-active":""} onClick={() => { setShowArchived(true); setActiveConversationId(null); }}>Archived</button></div>
+        {showNewMessage ? <div className="message-search-results">
+          {messageSearch.trim().length < 2 ? <p className="empty-state">Search by a person's name or username to start a real conversation.</p> : messageUserResults.length ? messageUserResults.map(user => <button className="conversation-row" key={user.id} onClick={() => startConversation(user)}><Avatar initials={initialsFor(user.full_name)}/><span className="conversation-copy"><strong>{user.full_name}</strong><small>@{user.username}</small></span><ArrowRight size={16}/></button>) : <p className="empty-state">No registered accounts found for that search.</p>}
+        </div> : visibleConversations.length ? visibleConversations.map(c => <button className={"conversation-row "+(String(activeConversationId)===String(c.id)?"conversation-active":"")} key={c.id} onClick={() => setActiveConversationId(c.id)}><Avatar initials={initialsFor(c.full_name)}/><span className="conversation-copy"><strong>{c.full_name}</strong><small>{c.last_message || "Start the conversation"}</small></span><span className="conversation-meta"><small>{formatTime(c.last_message_at)}</small></span></button>) : <div className="empty-state">No {showArchived ? "archived " : ""}conversations yet. Use the pencil button to message a registered user.</div>}
+      </section>
+      <section className="chat-panel">
+        {current ? <>
+          <div className="chat-head"><Avatar initials={initialsFor(current.full_name)}/><div><strong>{current.full_name}</strong><span>@{current.username}</span></div><button className="icon-button" aria-label={showArchived?"Restore conversation":"Archive conversation"} onClick={() => toggleConversationArchive(current.id, !showArchived)}><Archive size={18}/></button></div>
+          <div className="chat-history"><div className="chat-date">MESSAGES</div>{threadMessages.length ? threadMessages.map(m => <div className={"chat-message "+(String(m.sender_id)===String(authUser?.id)?"mine":"")} key={m.id}><p>{m.content}</p><small>{formatTime(m.created_at)}</small></div>) : <p className="empty-state">This is the beginning of your conversation. Send a message to get started.</p>}</div>
+          {!showArchived && <div className="chat-compose"><input value={messageDraft} onChange={e=>setMessageDraft(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendMessage()} placeholder="Write a message…" maxLength={4000}/><button className="primary-button send-message" onClick={sendMessage} disabled={!messageDraft.trim()||messageBusy}><Send size={16}/></button></div>}
+          <p className="preview-note chat-note">Messages are saved to your Gist Up account. Both people must have registered accounts.</p>
+        </> : <div className="empty-panel chat-empty"><div className="placeholder-icon"><MessageCircle size={27}/></div><h2>{showArchived?"Your archived chats":"Your conversations"}</h2><p>Select a chat, or use the pencil button to start a conversation with a registered Gist Up user.</p><button className="primary-button" onClick={() => { setShowArchived(false); setShowNewMessage(true); setMessageSearch(""); }}>New message <Pencil size={15}/></button></div>}
+      </section>
+    </div>;
   }
   function NotificationsPage() {
     const items=[["NC","Nia Carter","started following you.","2 min ago","lavender"],["TA","Tobi Adeyemi","mentioned you in a conversation.","1 hr ago","mint"],["LM","Leah Morgan","liked your post.","3 hr ago","peach"],["G","Gist Up","Welcome! Start by finding people and topics you enjoy.","Yesterday","lavender"]];
