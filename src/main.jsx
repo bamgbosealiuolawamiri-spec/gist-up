@@ -35,7 +35,8 @@ function App() {
   const [liked, setLiked] = useState([]);
   const [saved, setSaved] = useState([]);
   const [following, setFollowing] = useState([]);
-  const [posts, setPosts] = useState(seedPosts);
+  const [posts, setPosts] = useState([]);
+  const [postBusy, setPostBusy] = useState(false);
   const [postText, setPostText] = useState("");
   const [commentText, setCommentText] = useState("");
   const [commentPost, setCommentPost] = useState(null);
@@ -69,16 +70,43 @@ function App() {
   const [authError, setAuthError] = useState("");
   const [authUser, setAuthUser] = useState(null);
 
+  async function loadAppData(fallbackUser = null) {
+    try {
+      const [profileResponse, postsResponse] = await Promise.all([
+        fetch("/api/profile/me", { credentials: "same-origin" }),
+        fetch("/api/posts", { credentials: "same-origin" })
+      ]);
+      let user = fallbackUser;
+      if (profileResponse.ok) {
+        const data = await profileResponse.json();
+        user = data.profile || user;
+      }
+      if (user) {
+        setAuthUser(user);
+        setDisplayName(user.full_name || user.email?.split("@")[0] || "Your profile");
+        setHandle("@" + (user.username || user.email?.split("@")[0] || "member"));
+        setProfileBio(user.bio || "");
+      }
+      if (postsResponse.ok) {
+        const data = await postsResponse.json();
+        setPosts(Array.isArray(data.posts) ? data.posts : []);
+      } else if (postsResponse.status !== 401) {
+        notify("We couldn't load posts right now.");
+      }
+    } catch {
+      notify("Couldn't refresh your profile and feed. Please try again.");
+    }
+  }
+
   useEffect(() => {
     let mounted = true;
     fetch("/api/auth/me", { credentials: "same-origin" })
       .then(async response => response.ok ? (await response.json()).user : null)
-      .then(user => {
+      .then(async user => {
         if (!mounted || !user) return;
         setAuthUser(user);
-        setDisplayName(user.full_name || user.email?.split("@")[0] || "Your profile");
-        setHandle("@" + (user.email?.split("@")[0] || "member").toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 24));
         setAuthMode("app");
+        await loadAppData(user);
       })
       .catch(() => {});
     return () => { mounted = false; };
@@ -101,11 +129,13 @@ function App() {
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "We couldn't complete sign-in. Please try again.");
       const user = result.user;
+      if (!user) throw new Error("The account service returned an invalid response. Please try again.");
       setAuthUser(user);
       setDisplayName(user.full_name || user.email?.split("@")[0] || "Your profile");
-      setHandle("@" + (user.email?.split("@")[0] || "member").toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 24));
+      setHandle("@" + (user.username || user.email?.split("@")[0] || "member"));
       setAuthMode("app");
       setAuthError("");
+      await loadAppData(user);
       notify(authMode === "signup" ? "Welcome to Gist Up! Your account is ready." : "You're logged in.");
     } catch (error) {
       setAuthError(error?.message || "We couldn't complete sign-in. Please try again.");
@@ -125,10 +155,53 @@ function App() {
   }
 
   function notify(message) { setNotice(message); window.setTimeout(() => setNotice(""), 2800); }
-  function publish() {
-    if (!postText.trim()) return;
-    setPosts([{ id: Date.now(), name: displayName, handle, time: "Just now", initials: displayName.split(/\s+/).map(x => x[0]).join("").slice(0,2).toUpperCase(), tone: "lavender", text: postText.trim(), likes: 0, comments: 0, topic: "Your post" }, ...posts]);
-    setPostText(""); setComposerOpen(false); setActive("Home"); notify("Your post was added to this preview.");
+  async function publish() {
+    const content = postText.trim();
+    if (!content || postBusy) return;
+    setPostBusy(true);
+    try {
+      const response = await fetch("/api/posts", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "We couldn't publish your post.");
+      if (!result.post) throw new Error("The server didn't return the new post.");
+      setPosts(current => [result.post, ...current]);
+      setPostText("");
+      setComposerOpen(false);
+      setActive("Home");
+      notify("Your post was published.");
+    } catch (error) {
+      notify(error?.message || "We couldn't publish your post. Please try again.");
+    } finally {
+      setPostBusy(false);
+    }
+  }
+
+  async function saveProfile() {
+    const cleanHandle = handle.trim().replace(/^@+/, "");
+    try {
+      const response = await fetch("/api/profile/me", {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fullName: displayName, username: cleanHandle, bio: profileBio })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "We couldn't save your profile.");
+      if (!result.profile) throw new Error("The server didn't return the updated profile.");
+      setAuthUser(result.profile);
+      setDisplayName(result.profile.full_name);
+      setHandle("@" + result.profile.username);
+      setProfileBio(result.profile.bio || "");
+      setEditProfile(false);
+      notify("Your profile has been saved.");
+    } catch (error) {
+      notify(error?.message || "We couldn't save your profile. Please try again.");
+    }
   }
   function go(label) { setActive(label); setMobileNav(false); }
   function toggleFollow(person) { setFollowing(old => old.includes(person.handle) ? old.filter(x => x !== person.handle) : [...old, person.handle]); }
@@ -216,9 +289,9 @@ function App() {
     <div className="layout"><aside className={"left-sidebar "+(mobileNav?"open":"")}><div className="sidebar-label">MENU</div>{navigation.map(({label,icon:Icon})=><button key={label} className={"nav-item "+(active===label?"selected":"")} onClick={()=>go(label)}><Icon size={19}/><span>{label}</span>{label==="Notifications"&&<b className="nav-count">3</b>}</button>)}<div className="sidebar-divider"/><div className="sidebar-label">YOUR SPACE</div>{spaces.map(({label,name,icon:Icon,desc})=><button key={name} title={desc} className={"nav-item "+(active===name?"selected":"")} onClick={()=>go(name)}><Icon size={19}/><span>{name}</span></button>)}<button className={"nav-item "+(active==="Profile"?"selected":"")} onClick={()=>go("Profile")}><UserRound size={19}/><span>My profile</span></button><div className="sidebar-card"><div className="sidebar-card-icon"><Sparkles size={18}/></div><strong>Make your space yours</strong><p>Find your people and join conversations that matter to you.</p><button onClick={()=>go("Explore")}>Explore Gist Up <ArrowRight size={14}/></button></div><div className="sidebar-footer">About · Guidelines · Privacy<p>© 2026 Gist Up</p><button className="text-button" onClick={signOut}><LogOut size={13}/> Sign out</button></div></aside>
     <main className="feed-column"><HeaderTitle/>{page}</main>
     <aside className="right-sidebar"><section className="right-card profile-card"><div className="profile-cover"/><div className="profile-card-body"><Avatar initials={myInitials} size="large"/><strong>{displayName}</strong><span>{handle}</span><p>{profileBio}</p><div className="profile-metrics"><div><b>{following.length}</b><span>Following</span></div><div><b>0</b><span>Followers</span></div><div><b>{posts.filter(p=>p.handle===handle).length}</b><span>Posts</span></div></div><button className="outline-button" onClick={()=>go("Profile")}>View profile</button></div></section><section className="right-card trends-card"><div className="right-card-heading"><h3><TrendingUp size={17}/> What's happening</h3><button onClick={()=>go("Explore")}>See all</button></div>{[["#CreativeCommunity","2.4k posts","Creators"],["#MondayMotivation","1.8k posts","Lifestyle"],["#DesignTalk","956 posts","Technology"]].map(([tag,count,category])=><button className="trend-row" key={tag} onClick={()=>{setQuery(tag);go("Explore")}}><span>{category} · Trending</span><strong>{tag}</strong><small>{count}</small></button>)}</section><section className="right-card suggestions-card"><div className="right-card-heading"><h3>People to know</h3><button onClick={()=>go("Explore")}>See all</button></div>{people.slice(0,3).map(p=><div className="suggestion-row" key={p.handle}><Avatar initials={p.initials} tone={p.tone}/><div className="suggestion-info"><strong>{p.name}</strong><span>{p.handle}</span></div><button className="follow-button" onClick={()=>toggleFollow(p)}>{following.includes(p.handle)?"Following":"Follow"}</button></div>)}</section><footer className="right-footer">About · Help · Community Guidelines<br/>Privacy · Terms · Cookies<br/><span>© 2026 Gist Up</span></footer></aside></div>
-    {composerOpen&&<div className="modal-backdrop" onClick={()=>setComposerOpen(false)}><section className="composer-modal" role="dialog" aria-modal="true" aria-labelledby="composer-title" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2 id="composer-title">Create a post</h2><button className="icon-button" aria-label="Close" onClick={()=>setComposerOpen(false)}><X size={20}/></button></div><div className="modal-user"><Avatar initials={myInitials} size="medium"/><div><strong>{displayName}</strong><span>Sharing with everyone</span></div></div><textarea autoFocus value={postText} onChange={e=>setPostText(e.target.value)} placeholder="What's on your mind?" maxLength={5000}/><div className="modal-bottom"><span>{postText.length}/5000</span><button className="primary-button" disabled={!postText.trim()} onClick={publish}>Publish post <ArrowRight size={16}/></button></div><p className="preview-note">Preview only: posts are stored in this page session, not on a server.</p></section></div>}
+    {composerOpen&&<div className="modal-backdrop" onClick={()=>setComposerOpen(false)}><section className="composer-modal" role="dialog" aria-modal="true" aria-labelledby="composer-title" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2 id="composer-title">Create a post</h2><button className="icon-button" aria-label="Close" onClick={()=>setComposerOpen(false)}><X size={20}/></button></div><div className="modal-user"><Avatar initials={myInitials} size="medium"/><div><strong>{displayName}</strong><span>Sharing with everyone</span></div></div><textarea autoFocus value={postText} onChange={e=>setPostText(e.target.value)} placeholder="What's on your mind?" maxLength={5000}/><div className="modal-bottom"><span>{postText.length}/5000</span><button className="primary-button" disabled={!postText.trim()||postBusy} onClick={publish}>{postBusy?"Publishing…":"Publish post"} <ArrowRight size={16}/></button></div><p className="preview-note">Your post will be saved to your Gist Up account.</p></section></div>}
     {commentPost!==null&&<div className="modal-backdrop" onClick={()=>setCommentPost(null)}><section className="composer-modal" role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2>Comments</h2><button className="icon-button" onClick={()=>setCommentPost(null)}><X size={20}/></button></div><p className="muted">Join the conversation on this post.</p><div className="comment-input"><input value={commentText} onChange={e=>setCommentText(e.target.value)} placeholder="Write a comment…"/><button className="primary-button" onClick={()=>{if(commentText.trim())notify("Comment preview added locally.");setCommentText("");setCommentPost(null)}} disabled={!commentText.trim()}><Send size={15}/></button></div><p className="preview-note">Comments are not sent to real accounts in this preview.</p></section></div>}
-    {editProfile&&<div className="modal-backdrop" onClick={()=>setEditProfile(false)}><section className="composer-modal edit-modal" role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2>Edit profile</h2><button className="icon-button" onClick={()=>setEditProfile(false)}><X size={20}/></button></div><label className="auth-label">Display name<input value={displayName} onChange={e=>setDisplayName(e.target.value)} maxLength={50}/></label><label className="auth-label">Username<input value={handle} onChange={e=>setHandle(e.target.value.startsWith("@")?e.target.value:"@"+e.target.value)} maxLength={30}/></label><label className="auth-label">Bio<textarea value={profileBio} onChange={e=>setProfileBio(e.target.value)} maxLength={160}/></label><button className="primary-button auth-main-btn" onClick={()=>{setEditProfile(false);notify("Profile updated in this preview.")}}><Check size={16}/> Save changes</button><p className="preview-note">Profile edits are local to this preview.</p></section></div>}
+    {editProfile&&<div className="modal-backdrop" onClick={()=>setEditProfile(false)}><section className="composer-modal edit-modal" role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2>Edit profile</h2><button className="icon-button" onClick={()=>setEditProfile(false)}><X size={20}/></button></div><label className="auth-label">Display name<input value={displayName} onChange={e=>setDisplayName(e.target.value)} maxLength={50}/></label><label className="auth-label">Username<input value={handle} onChange={e=>setHandle(e.target.value.startsWith("@")?e.target.value:"@"+e.target.value)} maxLength={30}/></label><label className="auth-label">Bio<textarea value={profileBio} onChange={e=>setProfileBio(e.target.value)} maxLength={160}/></label><button className="primary-button auth-main-btn" onClick={saveProfile}><Check size={16}/> Save changes</button><p className="preview-note">Your display name, username, and bio will be saved to your account.</p></section></div>}
   </div>;
 }
 createRoot(document.getElementById("root")).render(<App />);
