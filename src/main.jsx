@@ -223,16 +223,19 @@ function App() {
   }
   function go(label) { setActive(label); setMobileNav(false); }
   function toggleFollow(person) { setFollowing(old => old.includes(person.handle) ? old.filter(x => x !== person.handle) : [...old, person.handle]); }
-  async function loadConversations() {
+  async function loadConversations(archivedOverride = showArchived, preferredConversationId = null) {
     try {
-      const response = await fetch("/api/conversations?archived=" + String(showArchived), { credentials: "same-origin" });
+      const response = await fetch("/api/conversations?archived=" + String(archivedOverride), { credentials: "same-origin" });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "We couldn't load your conversations.");
       const items = Array.isArray(result.conversations) ? result.conversations : [];
       setConversations(items);
-      if (activeConversationId && !items.some(item => String(item.id) === String(activeConversationId))) {
+      const preferredId = preferredConversationId || activeConversationId;
+      if (preferredId && items.some(item => String(item.id) === String(preferredId))) {
+        setActiveConversationId(preferredId);
+      } else if (preferredId && !items.some(item => String(item.id) === String(preferredId))) {
         setActiveConversationId(items.length ? items[0].id : null);
-      } else if (!activeConversationId && items.length && !showArchived) {
+      } else if (!preferredId && items.length && !archivedOverride) {
         setActiveConversationId(items[0].id);
       }
     } catch (error) {
@@ -267,7 +270,7 @@ function App() {
       setMessageSearch("");
       setActiveConversationId(result.conversationId);
       setActive("Messages");
-      await loadConversations();
+      await loadConversations(false, result.conversationId);
       await loadThread(result.conversationId);
     } catch (error) {
       notify(error?.message || "We couldn't start that conversation.");
