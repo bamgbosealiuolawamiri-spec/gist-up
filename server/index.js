@@ -51,7 +51,36 @@ function requireConfig(res) {
 }
 
 function publicUser(row) {
-  return { id: row.id, email: row.email, full_name: row.full_name, created_at: row.created_at };
+  return {
+    id: row.id,
+    email: row.email,
+    full_name: row.full_name,
+    username: row.username || row.email?.split("@")[0] || "member",
+    bio: row.bio || "",
+    avatar_url: row.avatar_url || null,
+    created_at: row.created_at
+  };
+}
+
+function cleanUsername(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^@+/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "")
+    .slice(0, 30);
+}
+
+async function availableUsername(base) {
+  const root = cleanUsername(base).slice(0, 22) || "member";
+  let candidate = root;
+  let suffix = 1;
+  while (true) {
+    const found = await pool.query("SELECT 1 FROM users WHERE username = $1 LIMIT 1", [candidate]);
+    if (!found.rowCount) return candidate;
+    const tail = String(suffix++);
+    candidate = root.slice(0, 30 - tail.length - 1) + "_" + tail;
+  }
 }
 
 function createSession(res, user) {
@@ -72,7 +101,7 @@ async function authenticate(req, res, next) {
   try {
     const payload = jwt.verify(token, JWT_SECRET, { issuer: "gist-up" });
     const result = await pool.query(
-      "SELECT id, email, full_name, created_at FROM users WHERE id = $1 LIMIT 1",
+      "SELECT id, email, full_name, username, bio, avatar_url, created_at FROM users WHERE id = $1 LIMIT 1",
       [payload.sub]
     );
     if (!result.rowCount) return res.status(401).json({ error: "Your session is no longer valid. Please log in again." });
@@ -113,9 +142,10 @@ app.post("/api/auth/signup", authLimiter, async (req, res) => {
     const existing = await pool.query("SELECT id FROM users WHERE email = $1 LIMIT 1", [email]);
     if (existing.rowCount) return res.status(409).json({ error: "An account with this email already exists. Log in instead." });
     const passwordHash = await bcrypt.hash(password, 12);
+    const username = await availableUsername(email.split("@")[0]);
     const result = await pool.query(
-      "INSERT INTO users (full_name, email, password_hash) VALUES ($1, $2, $3) RETURNING id, email, full_name, created_at",
-      [fullName, email, passwordHash]
+      "INSERT INTO users (full_name, email, password_hash, username) VALUES ($1, $2, $3, $4) RETURNING id, email, full_name, username, bio, avatar_url, created_at",
+      [fullName, email, passwordHash, username]
     );
     const user = publicUser(result.rows[0]);
     createSession(res, user);
@@ -133,7 +163,7 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
   if (!email || !password) return res.status(400).json({ error: "Enter your email address and password." });
   try {
     const result = await pool.query(
-      "SELECT id, email, full_name, password_hash, created_at FROM users WHERE email = $1 LIMIT 1",
+      "SELECT id, email, full_name, username, bio, avatar_url, password_hash, created_at FROM users WHERE email = $1 LIMIT 1",
       [email]
     );
     const row = result.rows[0];
@@ -146,6 +176,99 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
   } catch (error) {
     console.error("Login failed:", error?.message || "unknown error");
     return res.status(500).json({ error: "We couldn't log you in right now. Please try again." });
+  }
+});
+
+app.get("/api/profile/me", authenticate, (req, res) => {
+  res.json({ profile: req.user });
+});
+
+app.patch("/api/profile/me", authenticate, async (req, res) => {
+  const fullName = String(req.body?.fullName || "").trim();
+  const username = cleanUsername(req.body?.username);
+  const bio = String(req.body?.bio || "").trim();
+  if (fullName.length < 2 || fullName.length > 80) {
+    return res.status(400).json({ error: "Display name must be between 2 and 80 characters." });
+  }
+  if (!/^[a-z0-9_]{3,30}$/.test(username)) {
+    return res.status(400).json({ error: "Username must be 3–30 characters using letters, numbers, or underscores." });
+  }
+  if (bio.length > 160) return res.status(400).json({ error: "Bio must be 160 characters or fewer." });
+  try {
+    const duplicate = await pool.query(
+      "SELECT id FROM users WHERE username = $1 AND id <> $2 LIMIT 1",
+      [username, req.user.id]
+    );
+    if (duplicate.rowCount) return res.status(409).json({ error: "That username is already taken. Try another one." });
+    const result = await pool.query(
+      "UPDATE users SET full_name = $1, username = $2, bio = $3 WHERE id = $4 RETURNING id, email, full_name, username, bio, avatar_url, created_at",
+      [fullName, username, bio, req.user.id]
+    );
+    const profile = publicUser(result.rows[0]);
+    req.user = profile;
+    res.json({ profile });
+  } catch (error) {
+    console.error("Profile update failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "We couldn't save your profile right now. Please try again." });
+  }
+});
+
+app.get("/api/posts", authenticate, async (_req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT p.id, p.content, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url
+      FROM posts p
+      JOIN users u ON u.id = p.user_id
+      ORDER BY p.created_at DESC, p.id DESC
+      LIMIT 100
+    `);
+    res.json({ posts: result.rows.map(row => ({
+      id: row.id,
+      text: row.content,
+      name: row.full_name,
+      handle: "@" + row.username,
+      time: new Date(row.created_at).toLocaleString(),
+      initials: row.full_name.split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
+      tone: "lavender",
+      likes: 0,
+      comments: 0,
+      topic: "Community",
+      authorId: row.author_id
+    })) });
+  } catch (error) {
+    console.error("Posts fetch failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "We couldn't load posts right now." });
+  }
+});
+
+app.post("/api/posts", authenticate, async (req, res) => {
+  const content = String(req.body?.content || "").trim();
+  if (!content) return res.status(400).json({ error: "Write something before publishing." });
+  if (content.length > 5000) return res.status(400).json({ error: "Posts must be 5,000 characters or fewer." });
+  try {
+    const result = await pool.query(
+      `INSERT INTO posts (user_id, content)
+       VALUES ($1, $2)
+       RETURNING id, content, created_at`,
+      [req.user.id, content]
+    );
+    const row = result.rows[0];
+    res.status(201).json({ post: {
+      id: row.id,
+      text: row.content,
+      name: req.user.full_name,
+      handle: "@" + req.user.username,
+      time: new Date(row.created_at).toLocaleString(),
+      initials: req.user.full_name.split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
+      tone: "lavender",
+      likes: 0,
+      comments: 0,
+      topic: "Community",
+      authorId: req.user.id
+    }});
+  } catch (error) {
+    console.error("Post creation failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "We couldn't publish your post right now. Please try again." });
   }
 });
 
@@ -173,6 +296,24 @@ async function start() {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `);
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(30)");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS bio VARCHAR(160) NOT NULL DEFAULT ''");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT");
+      await pool.query(`
+        UPDATE users
+        SET username = COALESCE(NULLIF(lower(regexp_replace(split_part(email, '@', 1), '[^a-z0-9_]', '', 'g')), ''), 'member') || id::text
+        WHERE username IS NULL OR username = ''
+      `);
+      await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users (username)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS posts (
+          id BIGSERIAL PRIMARY KEY,
+          user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          content TEXT NOT NULL CHECK (char_length(content) BETWEEN 1 AND 5000),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS posts_created_at_idx ON posts (created_at DESC, id DESC)");
       console.log("Gist Up database schema is ready.");
     } catch (error) {
       console.error("Could not initialize database:", error?.message || "unknown error");
