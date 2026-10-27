@@ -10,12 +10,7 @@ const seedPosts = [
   { id: 2, name: "Daniel Okafor", handle: "@dancreates", time: "42 min ago", initials: "DO", tone: "peach", text: "Working on a new creative project this week. What's one thing you're learning right now?", likes: 86, comments: 17, topic: "Creators" },
   { id: 3, name: "Aisha Bello", handle: "@aishab", time: "1 hr ago", initials: "AB", tone: "mint", text: "Today's little win: I finally finished the book that has been sitting on my desk for months. What are you celebrating today?", likes: 204, comments: 31, topic: "Community" }
 ];
-const people = [
-  { name: "Nia Carter", handle: "@niacreates", initials: "NC", tone: "lavender", bio: "Illustrator, storyteller & professional daydreamer." },
-  { name: "Tobi Adeyemi", handle: "@tobiwrites", initials: "TA", tone: "mint", bio: "Writing about culture, creativity and everyday life." },
-  { name: "Leah Morgan", handle: "@leahm", initials: "LM", tone: "peach", bio: "Finding joy in little things. Coffee enthusiast." },
-  { name: "Daniel Okafor", handle: "@dancreates", initials: "DO", tone: "peach", bio: "Designer sharing works in progress and lessons." }
-];
+
 const navigation = [
   { label: "Home", icon: Home }, { label: "Explore", icon: Compass }, { label: "Communities", icon: Users },
   { label: "Messages", icon: MessageCircle }, { label: "Notifications", icon: Bell }, { label: "Saved", icon: Bookmark }
@@ -32,6 +27,9 @@ function App() {
   const [liked, setLiked] = useState([]);
   const [saved, setSaved] = useState([]);
   const [following, setFollowing] = useState([]);
+  const [people, setPeople] = useState([]);
+  const [feedMode, setFeedMode] = useState("for-you");
+  const [followerCount, setFollowerCount] = useState(0);
   const [posts, setPosts] = useState([]);
   const [postBusy, setPostBusy] = useState(false);
   const [postText, setPostText] = useState("");
@@ -76,9 +74,10 @@ function App() {
 
   async function loadAppData(fallbackUser = null) {
     try {
-      const [profileResponse, postsResponse] = await Promise.all([
+      const [profileResponse, postsResponse, usersResponse] = await Promise.all([
         fetch(API_BASE + "/api/profile/me", { credentials: "include" }),
-        fetch(API_BASE + "/api/posts", { credentials: "include" })
+        fetch(API_BASE + "/api/posts?feed=" + encodeURIComponent(feedMode), { credentials: "include" }),
+        fetch(API_BASE + "/api/users", { credentials: "include" })
       ]);
       let user = fallbackUser;
       if (profileResponse.ok) {
@@ -90,6 +89,25 @@ function App() {
         setDisplayName(user.full_name || user.email?.split("@")[0] || "Your profile");
         setHandle("@" + (user.username || user.email?.split("@")[0] || "member"));
         setProfileBio(user.bio || "");
+      }
+      if (profileResponse.ok) {
+        const profileData = await profileResponse.clone().json().catch(() => ({}));
+        setFollowerCount(Number(profileData.followersCount || 0));
+      }
+      if (usersResponse.ok) {
+        const userData = await usersResponse.json().catch(() => ({}));
+        const mapped = (Array.isArray(userData.users) ? userData.users : []).map((person, index) => ({
+          id: person.id,
+          name: person.full_name,
+          handle: "@" + person.username,
+          initials: String(person.full_name || person.username).split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
+          tone: ["lavender", "mint", "peach"][index % 3],
+          bio: person.bio || "Getting started on Gist Up.",
+          isFollowing: person.is_following === true,
+          followersCount: Number(person.followers_count || 0)
+        }));
+        setPeople(mapped);
+        setFollowing(mapped.filter(person => person.isFollowing).map(person => person.handle));
       }
       if (postsResponse.ok) {
         const data = await postsResponse.json();
@@ -277,7 +295,36 @@ function App() {
       notify(error?.message || "Couldn't publish comment.");
     }
   }
-  function toggleFollow(person) { setFollowing(old => old.includes(person.handle) ? old.filter(x => x !== person.handle) : [...old, person.handle]); }
+  async function toggleFollow(person) {
+    if (!person.id) { notify("Only registered accounts can be followed."); return; }
+    const wasFollowing = following.includes(person.handle);
+    setFollowing(old => wasFollowing ? old.filter(x => x !== person.handle) : [...old, person.handle]);
+    setPeople(old => old.map(item => item.id === person.id ? { ...item, isFollowing: !wasFollowing } : item));
+    try {
+      const response = await fetch(API_BASE + "/api/users/" + person.id + "/follow", { method: "POST", credentials: "include" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Couldn't update following.");
+      setFollowing(old => result.following ? (old.includes(person.handle) ? old : [...old, person.handle]) : old.filter(x => x !== person.handle));
+      setPeople(old => old.map(item => item.id === person.id ? { ...item, isFollowing: result.following, followersCount: result.followersCount } : item));
+    } catch (error) {
+      setFollowing(old => wasFollowing ? (old.includes(person.handle) ? old : [...old, person.handle]) : old.filter(x => x !== person.handle));
+      setPeople(old => old.map(item => item.id === person.id ? { ...item, isFollowing: wasFollowing } : item));
+      notify(error?.message || "Couldn't update following.");
+    }
+  }
+  async function changeFeed(mode) {
+    setFeedMode(mode);
+    try {
+      const response = await fetch(API_BASE + "/api/posts?feed=" + encodeURIComponent(mode), { credentials: "include" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Couldn't load this feed.");
+      const items = Array.isArray(result.posts) ? result.posts : [];
+      setPosts(items);
+      setLiked(items.filter(post => post.isLiked).map(post => post.id));
+    } catch (error) {
+      notify(error?.message || "Couldn't load this feed.");
+    }
+  }
   async function loadConversations(archivedOverride = showArchived, preferredConversationId = null) {
     try {
       const response = await fetch(API_BASE + "/api/conversations?archived=" + String(archivedOverride), { credentials: "include" });
@@ -407,7 +454,7 @@ function App() {
     return <article className="post-card" key={post.id}>
       <div className="post-header"><Avatar initials={post.initials} tone={post.tone}/><div className="post-author"><strong>{post.name}</strong><span>{post.handle} · {post.time}</span></div><button className="icon-button post-more" aria-label="Post options" onClick={() => { setSaved(old => old.includes(post.id) ? old.filter(x => x !== post.id) : [...old, post.id]); notify(saved.includes(post.id) ? "Removed from Saved." : "Post saved."); }}><MoreHorizontal size={21}/></button></div>
       <p className="post-copy">{post.text}</p><div className="post-tag"># {post.topic || "community"}</div>
-      <div className="post-stats"><span>{post.likes + (isLiked ? 1 : 0)} likes</span><span>{post.comments} comments</span></div>
+      <div className="post-stats"><span>{post.likes} likes</span><span>{post.comments} comments</span></div>
       <div className="post-actions"><button className={isLiked ? "liked" : ""} onClick={() => toggleLike(post)}><Heart size={18} fill={isLiked ? "currentColor" : "none"}/> Like</button><button onClick={() => openComments(post.id)}><MessageSquare size={18}/> Comment</button><button onClick={() => notify("Repost preview: this action is not yet connected to a server.")}><Repeat2 size={18}/> Repost</button><button aria-label="Share post" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(window.location.href).catch(()=>{}); notify("Share link copied when clipboard access is available."); }}><Share2 size={18}/></button><button aria-label="Save post" className={saved.includes(post.id) ? "liked" : ""} onClick={() => { setSaved(old => old.includes(post.id) ? old.filter(x => x !== post.id) : [...old, post.id]); notify(saved.includes(post.id) ? "Removed from Saved." : "Post saved."); }}><Bookmark size={18} fill={saved.includes(post.id) ? "currentColor" : "none"}/></button></div>
     </article>;
   }
@@ -415,7 +462,7 @@ function App() {
     return <>
       <section className="welcome-banner"><div className="welcome-copy"><span className="welcome-pill"><Sparkles size={13}/> YOUR PEOPLE. YOUR STORIES.</span><h2>A little more connection.<br/><span>A lot more you.</span></h2><p>A place to share your story, discover new perspectives, and find your people.</p><button onClick={() => go("Explore")}>Find your community <ArrowRight size={16}/></button></div><div className="banner-art"><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="art-card art-card-one"><span>✦</span><b>Good energy</b><small>starts here</small></div><div className="art-card art-card-two"><div className="mini-avatars"><i>M</i><i>D</i><i>A</i></div><b>Find your people</b><small>Make real connections</small></div><div className="art-sparkle">✦</div></div></section>
       <section className="composer-card"><Avatar initials={myInitials} size="medium"/><button className="composer-placeholder" onClick={() => setComposerOpen(true)}>What's on your mind?</button><button className="composer-tool" aria-label="Add photo" onClick={() => setComposerOpen(true)}><ImageIcon size={19}/></button><button className="composer-tool" aria-label="Add feeling" onClick={() => setComposerOpen(true)}><Smile size={19}/></button><button className="composer-post" onClick={() => setComposerOpen(true)}>Post</button></section>
-      <div className="feed-tabs"><button className="tab-active">For you</button><button onClick={() => notify("Following feed will reflect accounts you follow once sign-in is connected.")}>Following</button><button onClick={() => go("Explore")}>Trending</button><span className="feed-sort">Latest <MoreHorizontal size={18}/></span></div>
+      <div className="feed-tabs"><button className={feedMode==="for-you"?"tab-active":""} onClick={()=>changeFeed("for-you")}>For you</button><button className={feedMode==="following"?"tab-active":""} onClick={()=>changeFeed("following")}>Following</button><button onClick={() => go("Explore")}>Trending</button><span className="feed-sort">Latest <MoreHorizontal size={18}/></span></div>
       {posts.map(post => <PostCard post={post} key={post.id}/>)}
     </>;
   }
@@ -482,7 +529,7 @@ function App() {
     {notice&&<div className="toast" role="status">{notice}</div>}
     <div className="layout"><aside className={"left-sidebar "+(mobileNav?"open":"")}><div className="sidebar-label">MENU</div>{navigation.map(({label,icon:Icon})=><button key={label} className={"nav-item "+(active===label?"selected":"")} onClick={()=>go(label)}><Icon size={19}/><span>{label}</span>{label==="Notifications"&&<b className="nav-count">3</b>}</button>)}<div className="sidebar-divider"/><div className="sidebar-label">YOUR SPACE</div>{spaces.map(({label,name,icon:Icon,desc})=><button key={name} title={desc} className={"nav-item "+(active===name?"selected":"")} onClick={()=>go(name)}><Icon size={19}/><span>{name}</span></button>)}<button className={"nav-item "+(active==="Profile"?"selected":"")} onClick={()=>go("Profile")}><UserRound size={19}/><span>My profile</span></button><div className="sidebar-card"><div className="sidebar-card-icon"><Sparkles size={18}/></div><strong>Make your space yours</strong><p>Find your people and join conversations that matter to you.</p><button onClick={()=>go("Explore")}>Explore Gist Up <ArrowRight size={14}/></button></div><div className="sidebar-footer">About · Guidelines · Privacy<p>© 2026 Gist Up</p><button className="text-button" onClick={signOut}><LogOut size={13}/> Sign out</button></div></aside>
     <main className="feed-column"><HeaderTitle/>{page}</main>
-    <aside className="right-sidebar"><section className="right-card profile-card"><div className="profile-cover"/><div className="profile-card-body"><Avatar initials={myInitials} size="large"/><strong>{displayName}</strong><span>{handle}</span><p>{profileBio}</p><div className="profile-metrics"><div><b>{following.length}</b><span>Following</span></div><div><b>0</b><span>Followers</span></div><div><b>{posts.filter(p=>p.handle===handle).length}</b><span>Posts</span></div></div><button className="outline-button" onClick={()=>go("Profile")}>View profile</button></div></section><section className="right-card trends-card"><div className="right-card-heading"><h3><TrendingUp size={17}/> What's happening</h3><button onClick={()=>go("Explore")}>See all</button></div>{[["#CreativeCommunity","2.4k posts","Creators"],["#MondayMotivation","1.8k posts","Lifestyle"],["#DesignTalk","956 posts","Technology"]].map(([tag,count,category])=><button className="trend-row" key={tag} onClick={()=>{setQuery(tag);go("Explore")}}><span>{category} · Trending</span><strong>{tag}</strong><small>{count}</small></button>)}</section><section className="right-card suggestions-card"><div className="right-card-heading"><h3>People to know</h3><button onClick={()=>go("Explore")}>See all</button></div>{people.slice(0,3).map(p=><div className="suggestion-row" key={p.handle}><Avatar initials={p.initials} tone={p.tone}/><div className="suggestion-info"><strong>{p.name}</strong><span>{p.handle}</span></div><button className="follow-button" onClick={()=>toggleFollow(p)}>{following.includes(p.handle)?"Following":"Follow"}</button></div>)}</section><footer className="right-footer">About · Help · Community Guidelines<br/>Privacy · Terms · Cookies<br/><span>© 2026 Gist Up</span></footer></aside></div>
+    <aside className="right-sidebar"><section className="right-card profile-card"><div className="profile-cover"/><div className="profile-card-body"><Avatar initials={myInitials} size="large"/><strong>{displayName}</strong><span>{handle}</span><p>{profileBio}</p><div className="profile-metrics"><div><b>{following.length}</b><span>Following</span></div><div><b>{followerCount}</b><span>Followers</span></div><div><b>{posts.filter(p=>p.handle===handle).length}</b><span>Posts</span></div></div><button className="outline-button" onClick={()=>go("Profile")}>View profile</button></div></section><section className="right-card trends-card"><div className="right-card-heading"><h3><TrendingUp size={17}/> What's happening</h3><button onClick={()=>go("Explore")}>See all</button></div>{[["#CreativeCommunity","2.4k posts","Creators"],["#MondayMotivation","1.8k posts","Lifestyle"],["#DesignTalk","956 posts","Technology"]].map(([tag,count,category])=><button className="trend-row" key={tag} onClick={()=>{setQuery(tag);go("Explore")}}><span>{category} · Trending</span><strong>{tag}</strong><small>{count}</small></button>)}</section><section className="right-card suggestions-card"><div className="right-card-heading"><h3>People to know</h3><button onClick={()=>go("Explore")}>See all</button></div>{people.slice(0,3).map(p=><div className="suggestion-row" key={p.handle}><Avatar initials={p.initials} tone={p.tone}/><div className="suggestion-info"><strong>{p.name}</strong><span>{p.handle}</span></div><button className="follow-button" onClick={()=>toggleFollow(p)}>{following.includes(p.handle)?"Following":"Follow"}</button></div>)}</section><footer className="right-footer">About · Help · Community Guidelines<br/>Privacy · Terms · Cookies<br/><span>© 2026 Gist Up</span></footer></aside></div>
     {composerOpen&&<div className="modal-backdrop" onClick={()=>setComposerOpen(false)}><section className="composer-modal" role="dialog" aria-modal="true" aria-labelledby="composer-title" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2 id="composer-title">Create a post</h2><button className="icon-button" aria-label="Close" onClick={()=>setComposerOpen(false)}><X size={20}/></button></div><div className="modal-user"><Avatar initials={myInitials} size="medium"/><div><strong>{displayName}</strong><span>Sharing with everyone</span></div></div><textarea autoFocus value={postText} onChange={e=>setPostText(e.target.value)} placeholder="What's on your mind?" maxLength={5000}/><div className="modal-bottom"><span>{postText.length}/5000</span><button className="primary-button" disabled={!postText.trim()||postBusy} onClick={publish}>{postBusy?"Publishing…":"Publish post"} <ArrowRight size={16}/></button></div><p className="preview-note">Your post will be saved to your Gist Up account.</p></section></div>}
     {commentPost!==null&&<div className="modal-backdrop" onClick={()=>setCommentPost(null)}><section className="composer-modal" role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2>Comments</h2><button className="icon-button" onClick={()=>setCommentPost(null)}><X size={20}/></button></div><p className="muted">Comments are saved to this post.</p><div className="post-comments-list">{commentsBusy?<p className="muted">Loading comments…</p>:postComments.length?postComments.map(comment=><div className="saved-comment" key={comment.id}><strong>{comment.full_name || comment.username}</strong><p>{comment.content}</p><small>{new Date(comment.created_at).toLocaleString()}</small></div>):<p className="muted">No comments yet. Start the conversation.</p>}</div><div className="comment-input"><input value={commentText} onChange={e=>setCommentText(e.target.value)} maxLength={2000} placeholder="Write a comment…"/><button className="primary-button" onClick={submitComment} disabled={!commentText.trim()}><Send size={15}/></button></div></section></div>}
     {editProfile&&<div className="modal-backdrop" onClick={()=>setEditProfile(false)}><section className="composer-modal edit-modal" role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2>Edit profile</h2><button className="icon-button" onClick={()=>setEditProfile(false)}><X size={20}/></button></div><label className="auth-label">Display name<input value={displayName} onChange={e=>setDisplayName(e.target.value)} maxLength={50}/></label><label className="auth-label">Username<input value={handle} onChange={e=>setHandle(e.target.value.startsWith("@")?e.target.value:"@"+e.target.value)} maxLength={30}/></label><label className="auth-label">Bio<textarea value={profileBio} onChange={e=>setProfileBio(e.target.value)} maxLength={160}/></label><button className="primary-button auth-main-btn" onClick={saveProfile}><Check size={16}/> Save changes</button><p className="preview-note">Your display name, username, and bio will be saved to your account.</p></section></div>}
