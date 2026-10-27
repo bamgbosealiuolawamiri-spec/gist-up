@@ -460,6 +460,34 @@ app.post("/api/posts/:id/report", authenticate, async (req, res) => {
   }
 });
 
+app.get("/api/likes/me", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT p.id, p.content, p.created_at, u.id AS author_id, u.full_name, u.username,
+              (SELECT COUNT(*)::int FROM post_likes pl WHERE pl.post_id = p.id) AS likes,
+              (SELECT COUNT(*)::int FROM post_comments pc WHERE pc.post_id = p.id) AS comments,
+              (SELECT COUNT(*)::int FROM post_reposts pr WHERE pr.post_id = p.id) AS reposts,
+              EXISTS(SELECT 1 FROM post_reposts mine WHERE mine.post_id = p.id AND mine.user_id = $1) AS is_reposted
+       FROM post_likes mine JOIN posts p ON p.id = mine.post_id JOIN users u ON u.id = p.user_id
+       WHERE mine.user_id = $1
+         AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_id = $1 AND b.blocked_id = u.id) OR (b.blocker_id = u.id AND b.blocked_id = $1))
+       ORDER BY mine.created_at DESC LIMIT 200`,
+      [req.user.id]
+    );
+    return res.json({ posts: result.rows.map(row => ({
+      id: row.id, text: row.content, name: row.full_name, handle: "@" + row.username,
+      time: new Date(row.created_at).toLocaleString(),
+      initials: row.full_name.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
+      tone: "lavender", likes: row.likes || 0, comments: row.comments || 0,
+      reposts: row.reposts || 0, isLiked: true, isReposted: row.is_reposted === true,
+      topic: "Community", authorId: row.author_id
+    })) });
+  } catch (error) {
+    console.error("Liked posts fetch failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't load liked posts right now." });
+  }
+});
+
 app.get("/api/saved", authenticate, async (req, res) => {
   try {
     const result = await pool.query(
