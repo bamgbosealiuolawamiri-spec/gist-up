@@ -83,6 +83,7 @@ function App() {
       if (profileResponse.ok) {
         const data = await profileResponse.json();
         user = data.profile || user;
+        setFollowerCount(Number(data.followersCount || 0));
       }
       if (user) {
         setAuthUser(user);
@@ -90,17 +91,13 @@ function App() {
         setHandle("@" + (user.username || user.email?.split("@")[0] || "member"));
         setProfileBio(user.bio || "");
       }
-      if (profileResponse.ok) {
-        const profileData = await profileResponse.clone().json().catch(() => ({}));
-        setFollowerCount(Number(profileData.followersCount || 0));
-      }
       if (usersResponse.ok) {
         const userData = await usersResponse.json().catch(() => ({}));
         const mapped = (Array.isArray(userData.users) ? userData.users : []).map((person, index) => ({
           id: person.id,
           name: person.full_name,
           handle: "@" + person.username,
-          initials: String(person.full_name || person.username).split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
+          initials: String(person.full_name || person.username).split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
           tone: ["lavender", "mint", "peach"][index % 3],
           bio: person.bio || "Getting started on Gist Up.",
           isFollowing: person.is_following === true,
@@ -480,7 +477,7 @@ function App() {
       const text = [c.full_name, c.username, c.last_message || ""].join(" ").toLowerCase();
       return text.includes(messageSearch.toLowerCase());
     });
-    const initialsFor = name => String(name || "?").split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase();
+    const initialsFor = name => String(name || "?").split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase();
     const formatTime = value => value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
     return <div className="messages-layout">
       <section className="message-list-panel">
