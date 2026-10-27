@@ -817,7 +817,7 @@ function App() {
   }
 
   useEffect(() => {
-    const match = window.location.hash.match(/^#post-(\\d+)$/);
+    const match = window.location.hash.match(/^#post-(\d+)$/);
     if (!match || !posts.some(post => String(post.id) === match[1])) return;
     const timer = window.setTimeout(() => document.getElementById("post-" + match[1])?.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
     return () => window.clearTimeout(timer);
