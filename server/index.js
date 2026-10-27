@@ -428,6 +428,12 @@ app.post("/api/posts/:id/repost", authenticate, async (req, res) => {
     } else {
       await pool.query("DELETE FROM post_reposts WHERE user_id = $1 AND post_id = $2", [req.user.id, req.params.id]);
     }
+    if (reposted) {
+      await pool.query(
+        "INSERT INTO notifications (recipient_id, actor_id, type, post_id) SELECT p.user_id, $1, 'repost', p.id FROM posts p WHERE p.id = $2 AND p.user_id <> $1",
+        [req.user.id, req.params.id]
+      );
+    }
     const count = await pool.query("SELECT COUNT(*)::int AS count FROM post_reposts WHERE post_id = $1", [req.params.id]);
     return res.json({ reposted, reposts: count.rows[0].count });
   } catch (error) {
@@ -950,6 +956,8 @@ async function start() {
           is_read BOOLEAN NOT NULL DEFAULT FALSE
         )
       `);
+      await pool.query("ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_type_check");
+      await pool.query("ALTER TABLE notifications ADD CONSTRAINT notifications_type_check CHECK (type IN ('follow', 'like', 'comment', 'message', 'repost'))");
       await pool.query("CREATE INDEX IF NOT EXISTS notifications_recipient_idx ON notifications (recipient_id, created_at DESC, id DESC)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS post_reports (
