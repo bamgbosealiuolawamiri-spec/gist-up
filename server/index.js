@@ -409,6 +409,30 @@ app.patch("/api/notifications/read-all", authenticate, async (req, res) => {
   }
 });
 
+app.post("/api/posts/:id/report", authenticate, async (req, res) => {
+  const allowedReasons = ["Spam", "Harassment or bullying", "Hate or abuse", "False information", "Other"];
+  const reason = String(req.body?.reason || "");
+  const details = String(req.body?.details || "").trim();
+  if (!allowedReasons.includes(reason)) return res.status(400).json({ error: "Choose a report reason." });
+  if (details.length > 500) return res.status(400).json({ error: "Additional details must be 500 characters or fewer." });
+  try {
+    const post = await pool.query("SELECT user_id FROM posts WHERE id = $1 LIMIT 1", [req.params.id]);
+    if (!post.rowCount) return res.status(404).json({ error: "Post not found." });
+    if (Number(post.rows[0].user_id) === Number(req.user.id)) return res.status(400).json({ error: "You can't report your own post." });
+    await pool.query(
+      `INSERT INTO post_reports (reporter_id, post_id, reason, details)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (reporter_id, post_id)
+       DO UPDATE SET reason = EXCLUDED.reason, details = EXCLUDED.details, status = 'pending', created_at = NOW()`,
+      [req.user.id, req.params.id, reason, details]
+    );
+    return res.status(201).json({ ok: true, message: "Thanks. Your report has been sent for review." });
+  } catch (error) {
+    console.error("Post report failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't submit your report right now." });
+  }
+});
+
 app.get("/api/saved", authenticate, async (req, res) => {
   try {
     const result = await pool.query(
@@ -863,6 +887,19 @@ async function start() {
         )
       `);
       await pool.query("CREATE INDEX IF NOT EXISTS notifications_recipient_idx ON notifications (recipient_id, created_at DESC, id DESC)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS post_reports (
+          id BIGSERIAL PRIMARY KEY,
+          reporter_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+          reason VARCHAR(40) NOT NULL CHECK (reason IN ('Spam', 'Harassment or bullying', 'Hate or abuse', 'False information', 'Other')),
+          details VARCHAR(500) NOT NULL DEFAULT '',
+          status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'reviewing', 'resolved', 'dismissed')),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (reporter_id, post_id)
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS post_reports_status_created_idx ON post_reports (status, created_at DESC)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS ad_campaigns (
           id BIGSERIAL PRIMARY KEY,
