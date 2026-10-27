@@ -202,6 +202,80 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
   }
 });
 
+app.get("/api/settings", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query("SELECT preferences FROM user_settings WHERE user_id = $1 LIMIT 1", [req.user.id]);
+    return res.json({ settings: result.rows[0]?.preferences || {} });
+  } catch (error) {
+    console.error("Settings fetch failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't load your settings right now." });
+  }
+});
+
+app.patch("/api/settings", authenticate, async (req, res) => {
+  const allowed = ["darkMode", "notificationsFollowers", "notificationsEngagement", "notificationsMessages", "notificationsCommunities"];
+  const updates = {};
+  for (const key of allowed) {
+    if (typeof req.body?.[key] === "boolean") updates[key] = req.body[key];
+  }
+  if (!Object.keys(updates).length) return res.status(400).json({ error: "Choose a valid setting to update." });
+  try {
+    const result = await pool.query(
+      `INSERT INTO user_settings (user_id, preferences) VALUES ($1, $2::jsonb)
+       ON CONFLICT (user_id) DO UPDATE SET preferences = user_settings.preferences || EXCLUDED.preferences, updated_at = NOW()
+       RETURNING preferences`,
+      [req.user.id, JSON.stringify(updates)]
+    );
+    return res.json({ settings: result.rows[0].preferences });
+  } catch (error) {
+    console.error("Settings update failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't save this setting right now." });
+  }
+});
+
+app.post("/api/auth/change-password", authenticate, authLimiter, async (req, res) => {
+  const currentPassword = String(req.body?.currentPassword || "");
+  const newPassword = String(req.body?.newPassword || "");
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: "Enter your current password and a new password." });
+  if (newPassword.length < 8 || newPassword.length > 128) return res.status(400).json({ error: "Your new password must be between 8 and 128 characters." });
+  if (currentPassword === newPassword) return res.status(400).json({ error: "Choose a new password different from your current one." });
+  try {
+    const result = await pool.query("SELECT password_hash FROM users WHERE id = $1 LIMIT 1", [req.user.id]);
+    if (!result.rowCount || !(await bcrypt.compare(currentPassword, result.rows[0].password_hash))) {
+      return res.status(400).json({ error: "Your current password is incorrect." });
+    }
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, req.user.id]);
+    return res.json({ ok: true, message: "Your password has been updated." });
+  } catch (error) {
+    console.error("Password update failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't update your password right now." });
+  }
+});
+
+app.get("/api/account/export", authenticate, async (req, res) => {
+  try {
+    const [profile, posts, likes, saved, comments] = await Promise.all([
+      pool.query("SELECT id, email, full_name, username, bio, avatar_url, created_at FROM users WHERE id = $1", [req.user.id]),
+      pool.query("SELECT id, content, created_at FROM posts WHERE user_id = $1 ORDER BY created_at DESC", [req.user.id]),
+      pool.query("SELECT post_id, created_at FROM post_likes WHERE user_id = $1 ORDER BY created_at DESC", [req.user.id]),
+      pool.query("SELECT post_id, created_at FROM saved_posts WHERE user_id = $1 ORDER BY created_at DESC", [req.user.id]),
+      pool.query("SELECT id, post_id, content, created_at FROM post_comments WHERE user_id = $1 ORDER BY created_at DESC", [req.user.id])
+    ]);
+    return res.json({
+      exportedAt: new Date().toISOString(),
+      profile: profile.rows[0] || null,
+      posts: posts.rows,
+      likes: likes.rows,
+      savedPosts: saved.rows,
+      comments: comments.rows
+    });
+  } catch (error) {
+    console.error("Account export failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't export your information right now." });
+  }
+});
+
 app.get("/api/profile/me", authenticate, async (req, res) => {
   try {
     const counts = await pool.query(
@@ -936,6 +1010,14 @@ async function start() {
         WHERE username IS NULL OR username = ''
       `);
       await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users (username)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS user_settings (
+          user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          preferences JSONB NOT NULL DEFAULT '{}'::jsonb,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
       await pool.query(`
         CREATE TABLE IF NOT EXISTS posts (
           id BIGSERIAL PRIMARY KEY,
