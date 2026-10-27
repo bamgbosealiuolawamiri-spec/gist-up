@@ -258,7 +258,7 @@ app.get("/api/posts", authenticate, async (req, res) => {
       name: row.full_name,
       handle: "@" + row.username,
       time: new Date(row.created_at).toLocaleString(),
-      initials: row.full_name.split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
+      initials: row.full_name.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
       tone: "lavender",
       likes: row.likes || 0,
       comments: row.comments || 0,
@@ -290,7 +290,7 @@ app.post("/api/posts", authenticate, async (req, res) => {
       name: req.user.full_name,
       handle: "@" + req.user.username,
       time: new Date(row.created_at).toLocaleString(),
-      initials: req.user.full_name.split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
+      initials: req.user.full_name.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
       tone: "lavender",
       likes: 0,
       comments: 0,
@@ -318,7 +318,7 @@ app.get("/api/saved", authenticate, async (req, res) => {
     return res.json({ posts: result.rows.map(row => ({
       id: row.id, text: row.content, name: row.full_name, handle: "@" + row.username,
       time: new Date(row.created_at).toLocaleString(),
-      initials: row.full_name.split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
+      initials: row.full_name.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
       tone: "lavender", likes: row.likes || 0, comments: row.comments || 0,
       isLiked: row.is_liked === true, topic: "Community", authorId: row.author_id
     })) });
