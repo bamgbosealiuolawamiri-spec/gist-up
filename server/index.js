@@ -194,8 +194,17 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
   }
 });
 
-app.get("/api/profile/me", authenticate, (req, res) => {
-  res.json({ profile: req.user });
+app.get("/api/profile/me", authenticate, async (req, res) => {
+  try {
+    const counts = await pool.query(
+      "SELECT (SELECT COUNT(*)::int FROM user_follows WHERE followed_id = $1) AS followers_count, (SELECT COUNT(*)::int FROM user_follows WHERE follower_id = $1) AS following_count",
+      [req.user.id]
+    );
+    return res.json({ profile: req.user, followersCount: counts.rows[0].followers_count, followingCount: counts.rows[0].following_count });
+  } catch (error) {
+    console.error("Profile counts fetch failed:", error?.message || "unknown error");
+    return res.json({ profile: req.user, followersCount: 0, followingCount: 0 });
+  }
 });
 
 app.patch("/api/profile/me", authenticate, async (req, res) => {
