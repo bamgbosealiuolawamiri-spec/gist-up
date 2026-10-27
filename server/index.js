@@ -401,7 +401,7 @@ app.get("/api/blocks/me", authenticate, async (req, res) => {
 app.post("/api/users/:id/block", authenticate, async (req, res) => {
   const targetId = String(req.params.id || "");
   const blocked = req.body?.blocked === true;
-  if (!/^\\d+$/.test(targetId) || targetId === String(req.user.id)) {
+  if (!/^\d+$/.test(targetId) || targetId === String(req.user.id)) {
     return res.status(400).json({ error: "Choose a valid account to block." });
   }
   try {
@@ -422,7 +422,7 @@ app.post("/api/users/:id/block", authenticate, async (req, res) => {
 
 app.post("/api/users/:id/follow", authenticate, async (req, res) => {
   const targetId = String(req.params.id || "");
-  if (!/^\\d+$/.test(targetId) || targetId === String(req.user.id)) {
+  if (!/^\d+$/.test(targetId) || targetId === String(req.user.id)) {
     return res.status(400).json({ error: "Choose a valid account to follow." });
   }
   try {
