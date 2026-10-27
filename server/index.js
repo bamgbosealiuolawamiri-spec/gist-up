@@ -508,7 +508,7 @@ app.post("/api/posts/:id/repost", authenticate, async (req, res) => {
     }
     if (reposted) {
       await pool.query(
-        "INSERT INTO notifications (recipient_id, actor_id, type, post_id) SELECT p.user_id, $1, 'repost', p.id FROM posts p WHERE p.id = $2 AND p.user_id <> $1",
+        "INSERT INTO notifications (recipient_id, actor_id, type, post_id) SELECT p.user_id, $1, 'repost', p.id FROM posts p WHERE p.id = $2 AND p.user_id <> $1 AND COALESCE((SELECT (preferences->>'notificationsEngagement')::boolean FROM user_settings WHERE user_id = p.user_id), TRUE)",
         [req.user.id, req.params.id]
       );
     }
@@ -626,7 +626,7 @@ app.post("/api/posts/:id/like", authenticate, async (req, res) => {
       await pool.query("INSERT INTO post_likes (user_id, post_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [req.user.id, req.params.id]);
       liked = true;
       await pool.query(
-        "INSERT INTO notifications (recipient_id, actor_id, type, post_id) SELECT p.user_id, $1, 'like', p.id FROM posts p WHERE p.id = $2 AND p.user_id <> $1",
+        "INSERT INTO notifications (recipient_id, actor_id, type, post_id) SELECT p.user_id, $1, 'like', p.id FROM posts p WHERE p.id = $2 AND p.user_id <> $1 AND COALESCE((SELECT (preferences->>'notificationsEngagement')::boolean FROM user_settings WHERE user_id = p.user_id), TRUE)",
         [req.user.id, req.params.id]
       );
     }
@@ -666,7 +666,7 @@ app.post("/api/posts/:id/comments", authenticate, async (req, res) => {
     `, [req.params.id, req.user.id, content]);
     if (!result.rowCount) return res.status(404).json({ error: "Post not found." });
     await pool.query(
-      "INSERT INTO notifications (recipient_id, actor_id, type, post_id) SELECT p.user_id, $1, 'comment', p.id FROM posts p WHERE p.id = $2 AND p.user_id <> $1",
+      "INSERT INTO notifications (recipient_id, actor_id, type, post_id) SELECT p.user_id, $1, 'comment', p.id FROM posts p WHERE p.id = $2 AND p.user_id <> $1 AND COALESCE((SELECT (preferences->>'notificationsEngagement')::boolean FROM user_settings WHERE user_id = p.user_id), TRUE)",
       [req.user.id, req.params.id]
     );
     return res.status(201).json({ comment: { ...result.rows[0], full_name: req.user.full_name, username: req.user.username } });
@@ -754,7 +754,7 @@ app.post("/api/users/:id/follow", authenticate, async (req, res) => {
       await pool.query("INSERT INTO user_follows (follower_id, followed_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [req.user.id, targetId]);
       following = true;
       await pool.query(
-        "INSERT INTO notifications (recipient_id, actor_id, type) VALUES ($1, $2, 'follow')",
+        "INSERT INTO notifications (recipient_id, actor_id, type) SELECT $1, $2, 'follow' WHERE COALESCE((SELECT (preferences->>'notificationsFollowers')::boolean FROM user_settings WHERE user_id = $1), TRUE)",
         [targetId, req.user.id]
       );
     }
@@ -945,7 +945,7 @@ app.post("/api/conversations/:id/messages", authenticate, async (req, res) => {
       [req.params.id, req.user.id, content]
     );
     await pool.query(
-      "INSERT INTO notifications (recipient_id, actor_id, type) SELECT CASE WHEN c.user_a_id = $2 THEN c.user_b_id ELSE c.user_a_id END, $2, 'message' FROM conversations c WHERE c.id = $1",
+      "INSERT INTO notifications (recipient_id, actor_id, type) SELECT recipient.id, $2, 'message' FROM conversations c CROSS JOIN LATERAL (SELECT CASE WHEN c.user_a_id = $2 THEN c.user_b_id ELSE c.user_a_id END AS id) recipient WHERE c.id = $1 AND COALESCE((SELECT (preferences->>'notificationsMessages')::boolean FROM user_settings WHERE user_id = recipient.id), TRUE)",
       [req.params.id, req.user.id]
     );
     res.status(201).json({ message: result.rows[0] });
