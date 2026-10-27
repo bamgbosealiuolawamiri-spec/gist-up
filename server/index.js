@@ -304,6 +304,47 @@ app.post("/api/posts", authenticate, async (req, res) => {
 });
 
 
+app.get("/api/saved", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT p.id, p.content, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url,
+              (SELECT COUNT(*)::int FROM post_likes pl WHERE pl.post_id = p.id) AS likes,
+              (SELECT COUNT(*)::int FROM post_comments pc WHERE pc.post_id = p.id) AS comments,
+              EXISTS(SELECT 1 FROM post_likes mine WHERE mine.post_id = p.id AND mine.user_id = $1) AS is_liked
+       FROM saved_posts sp JOIN posts p ON p.id = sp.post_id JOIN users u ON u.id = p.user_id
+       WHERE sp.user_id = $1 ORDER BY sp.created_at DESC LIMIT 200`,
+      [req.user.id]
+    );
+    return res.json({ posts: result.rows.map(row => ({
+      id: row.id, text: row.content, name: row.full_name, handle: "@" + row.username,
+      time: new Date(row.created_at).toLocaleString(),
+      initials: row.full_name.split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
+      tone: "lavender", likes: row.likes || 0, comments: row.comments || 0,
+      isLiked: row.is_liked === true, topic: "Community", authorId: row.author_id
+    })) });
+  } catch (error) {
+    console.error("Saved posts fetch failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't load saved posts right now." });
+  }
+});
+
+app.post("/api/posts/:id/save", authenticate, async (req, res) => {
+  const saved = req.body?.saved === true;
+  try {
+    const post = await pool.query("SELECT id FROM posts WHERE id = $1 LIMIT 1", [req.params.id]);
+    if (!post.rowCount) return res.status(404).json({ error: "Post not found." });
+    if (saved) {
+      await pool.query("INSERT INTO saved_posts (user_id, post_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [req.user.id, req.params.id]);
+    } else {
+      await pool.query("DELETE FROM saved_posts WHERE user_id = $1 AND post_id = $2", [req.user.id, req.params.id]);
+    }
+    return res.json({ saved, postId: Number(req.params.id) });
+  } catch (error) {
+    console.error("Save post failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't update saved posts right now." });
+  }
+});
+
 app.post("/api/posts/:id/like", authenticate, async (req, res) => {
   try {
     const post = await pool.query("SELECT id FROM posts WHERE id = $1 LIMIT 1", [req.params.id]);
@@ -680,6 +721,15 @@ async function start() {
         )
       `);
       await pool.query("CREATE INDEX IF NOT EXISTS post_comments_post_created_idx ON post_comments (post_id, created_at, id)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS saved_posts (
+          user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id, post_id)
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS saved_posts_user_created_idx ON saved_posts (user_id, created_at DESC)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS conversations (
           id BIGSERIAL PRIMARY KEY,
