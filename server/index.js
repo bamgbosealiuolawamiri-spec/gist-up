@@ -111,7 +111,7 @@ function createSession(res, user) {
   res.cookie("gistup_session", token, {
     httpOnly: true,
     secure: isProduction,
-    sameSite: "lax",
+    sameSite: isProduction ? "none" : "lax",
     path: "/",
     maxAge: 7 * 24 * 60 * 60 * 1000
   });
@@ -131,7 +131,7 @@ async function authenticate(req, res, next) {
     req.user = publicUser(result.rows[0]);
     next();
   } catch {
-    res.clearCookie("gistup_session", { httpOnly: true, secure: isProduction, sameSite: "lax", path: "/" });
+    res.clearCookie("gistup_session", { httpOnly: true, secure: isProduction, sameSite: isProduction ? "none" : "lax", path: "/" });
     return res.status(401).json({ error: "Your session expired. Please log in again." });
   }
 }
@@ -1014,7 +1014,7 @@ app.patch("/api/conversations/:id/archive", authenticate, async (req, res) => {
 app.get("/api/auth/me", authenticate, (req, res) => res.json({ user: req.user }));
 
 app.post("/api/auth/logout", (_req, res) => {
-  res.clearCookie("gistup_session", { httpOnly: true, secure: isProduction, sameSite: "lax", path: "/" });
+  res.clearCookie("gistup_session", { httpOnly: true, secure: isProduction, sameSite: isProduction ? "none" : "lax", path: "/" });
   res.json({ ok: true });
 });
 
