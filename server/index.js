@@ -304,6 +304,32 @@ app.post("/api/posts", authenticate, async (req, res) => {
 });
 
 
+app.get("/api/notifications", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT n.id, n.type, n.post_id, n.created_at, n.is_read,
+              a.id AS actor_id, a.full_name AS actor_name, a.username AS actor_username
+       FROM notifications n LEFT JOIN users a ON a.id = n.actor_id
+       WHERE n.recipient_id = $1 ORDER BY n.created_at DESC, n.id DESC LIMIT 100`,
+      [req.user.id]
+    );
+    return res.json({ notifications: result.rows });
+  } catch (error) {
+    console.error("Notifications fetch failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't load notifications right now." });
+  }
+});
+
+app.patch("/api/notifications/read-all", authenticate, async (req, res) => {
+  try {
+    await pool.query("UPDATE notifications SET is_read = TRUE WHERE recipient_id = $1 AND is_read = FALSE", [req.user.id]);
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error("Notifications read update failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't update notifications right now." });
+  }
+});
+
 app.get("/api/saved", authenticate, async (req, res) => {
   try {
     const result = await pool.query(
@@ -357,6 +383,10 @@ app.post("/api/posts/:id/like", authenticate, async (req, res) => {
     } else {
       await pool.query("INSERT INTO post_likes (user_id, post_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [req.user.id, req.params.id]);
       liked = true;
+      await pool.query(
+        "INSERT INTO notifications (recipient_id, actor_id, type, post_id) SELECT p.user_id, $1, 'like', p.id FROM posts p WHERE p.id = $2 AND p.user_id <> $1",
+        [req.user.id, req.params.id]
+      );
     }
     const count = await pool.query("SELECT COUNT(*)::int AS count FROM post_likes WHERE post_id = $1", [req.params.id]);
     return res.json({ liked, likes: count.rows[0].count });
@@ -393,6 +423,10 @@ app.post("/api/posts/:id/comments", authenticate, async (req, res) => {
       RETURNING id, post_id, user_id, content, created_at
     `, [req.params.id, req.user.id, content]);
     if (!result.rowCount) return res.status(404).json({ error: "Post not found." });
+    await pool.query(
+      "INSERT INTO notifications (recipient_id, actor_id, type, post_id) SELECT p.user_id, $1, 'comment', p.id FROM posts p WHERE p.id = $2 AND p.user_id <> $1",
+      [req.user.id, req.params.id]
+    );
     return res.status(201).json({ comment: { ...result.rows[0], full_name: req.user.full_name, username: req.user.username } });
   } catch (error) {
     console.error("Post comment failed:", error?.message || "unknown error");
@@ -477,6 +511,10 @@ app.post("/api/users/:id/follow", authenticate, async (req, res) => {
     } else {
       await pool.query("INSERT INTO user_follows (follower_id, followed_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [req.user.id, targetId]);
       following = true;
+      await pool.query(
+        "INSERT INTO notifications (recipient_id, actor_id, type) VALUES ($1, $2, 'follow')",
+        [targetId, req.user.id]
+      );
     }
     const counts = await pool.query(
       "SELECT (SELECT COUNT(*)::int FROM user_follows WHERE follower_id = $1) AS following_count, (SELECT COUNT(*)::int FROM user_follows WHERE followed_id = $1) AS followers_count",
@@ -608,6 +646,10 @@ app.post("/api/conversations/:id/messages", authenticate, async (req, res) => {
        RETURNING id, content, created_at, sender_id`,
       [req.params.id, req.user.id, content]
     );
+    await pool.query(
+      "INSERT INTO notifications (recipient_id, actor_id, type) SELECT CASE WHEN c.user_a_id = $2 THEN c.user_b_id ELSE c.user_a_id END, $2, 'message' FROM conversations c WHERE c.id = $1",
+      [req.params.id, req.user.id]
+    );
     res.status(201).json({ message: result.rows[0] });
   } catch (error) {
     console.error("Message send failed:", error?.message || "unknown error");
@@ -730,6 +772,18 @@ async function start() {
         )
       `);
       await pool.query("CREATE INDEX IF NOT EXISTS saved_posts_user_created_idx ON saved_posts (user_id, created_at DESC)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id BIGSERIAL PRIMARY KEY,
+          recipient_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          actor_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+          type VARCHAR(20) NOT NULL CHECK (type IN ('follow', 'like', 'comment', 'message')),
+          post_id BIGINT REFERENCES posts(id) ON DELETE CASCADE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          is_read BOOLEAN NOT NULL DEFAULT FALSE
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS notifications_recipient_idx ON notifications (recipient_id, created_at DESC, id DESC)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS conversations (
           id BIGSERIAL PRIMARY KEY,
