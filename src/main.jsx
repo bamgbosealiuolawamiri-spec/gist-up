@@ -28,6 +28,13 @@ function App() {
   const [saved, setSaved] = useState([]);
   const [savedPosts, setSavedPosts] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
+  const [campaignModalOpen, setCampaignModalOpen] = useState(false);
+  const [campaignName, setCampaignName] = useState("");
+  const [campaignGoal, setCampaignGoal] = useState("Reach");
+  const [campaignBudget, setCampaignBudget] = useState("1000");
+  const [campaignAudience, setCampaignAudience] = useState("");
+  const [campaignBusy, setCampaignBusy] = useState(false);
   const [following, setFollowing] = useState([]);
   const [people, setPeople] = useState([]);
   const [feedMode, setFeedMode] = useState("for-you");
@@ -76,14 +83,15 @@ function App() {
 
   async function loadAppData(fallbackUser = null) {
     try {
-      const [profileResponse, postsResponse, usersResponse, followingResponse, blocksResponse, savedResponse, notificationsResponse] = await Promise.all([
+      const [profileResponse, postsResponse, usersResponse, followingResponse, blocksResponse, savedResponse, notificationsResponse, campaignsResponse] = await Promise.all([
         fetch(API_BASE + "/api/profile/me", { credentials: "include" }),
         fetch(API_BASE + "/api/posts?feed=" + encodeURIComponent(feedMode), { credentials: "include" }),
         fetch(API_BASE + "/api/users", { credentials: "include" }),
         fetch(API_BASE + "/api/follows/me", { credentials: "include" }),
         fetch(API_BASE + "/api/blocks/me", { credentials: "include" }),
         fetch(API_BASE + "/api/saved", { credentials: "include" }),
-        fetch(API_BASE + "/api/notifications", { credentials: "include" })
+        fetch(API_BASE + "/api/notifications", { credentials: "include" }),
+        fetch(API_BASE + "/api/ads/campaigns", { credentials: "include" })
       ]);
       let user = fallbackUser;
       if (profileResponse.ok) {
@@ -142,6 +150,10 @@ function App() {
       if (notificationsResponse.ok) {
         const notificationsData = await notificationsResponse.json().catch(() => ({}));
         setNotifications(Array.isArray(notificationsData.notifications) ? notificationsData.notifications : []);
+      }
+      if (campaignsResponse.ok) {
+        const campaignsData = await campaignsResponse.json().catch(() => ({}));
+        setCampaigns(Array.isArray(campaignsData.campaigns) ? campaignsData.campaigns : []);
       }
     } catch {
       notify("Couldn't refresh your profile and feed. Please try again.");
@@ -337,6 +349,30 @@ function App() {
       setFollowing(old => wasFollowing ? (old.includes(person.handle) ? old : [...old, person.handle]) : old.filter(x => x !== person.handle));
       setPeople(old => old.map(item => item.id === person.id ? { ...item, isFollowing: wasFollowing } : item));
       notify(error?.message || "Couldn't update following.");
+    }
+  }
+  async function createCampaign() {
+    const name = campaignName.trim();
+    if (name.length < 3) { notify("Give your campaign a name of at least 3 characters."); return; }
+    setCampaignBusy(true);
+    try {
+      const response = await fetch(API_BASE + "/api/ads/campaigns", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, goal: campaignGoal, dailyBudget: Number(campaignBudget), audience: campaignAudience.trim() })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Couldn't save this campaign.");
+      setCampaigns(old => [result.campaign, ...old]);
+      setCampaignName("");
+      setCampaignGoal("Reach");
+      setCampaignBudget("1000");
+      setCampaignAudience("");
+      setCampaignModalOpen(false);
+      notify("Campaign draft saved.");
+    } catch (error) {
+      notify(error?.message || "Couldn't save this campaign.");
+    } finally {
+      setCampaignBusy(false);
     }
   }
   async function toggleSave(post) {
@@ -591,7 +627,14 @@ function App() {
     return <div className="screen-stack"><section className="feature-panel"><div><span className="welcome-pill"><Sparkles size={13}/> CREATOR SPACE</span><h2>Make something meaningful.</h2><p>Draft your next post, review your recent activity, and keep your ideas moving.</p><button className="primary-button" onClick={()=>setComposerOpen(true)}><Plus size={16}/> Create a post</button></div><WandSparkles size={58}/></section><div className="stats-grid"><div className="stat-card"><span>Posts in preview</span><b>{posts.filter(p=>p.handle===handle).length}</b><small><FileText size={14}/> Published drafts</small></div><div className="stat-card"><span>Total likes</span><b>{posts.filter(p=>p.handle===handle).reduce((n,p)=>n+p.likes,0)}</b><small><Heart size={14}/> Engagement preview</small></div><div className="stat-card"><span>Following</span><b>{following.length}</b><small><Users size={14}/> Your connections</small></div></div><section className="content-panel"><div className="section-title"><h2>Your recent posts</h2><button className="text-button" onClick={()=>go("Profile")}>View profile</button></div>{posts.filter(p=>p.handle===handle).length?posts.filter(p=>p.handle===handle).map(p=><PostCard post={p} key={p.id}/>):<p className="empty-state">You haven't published a post in this preview yet.</p>}</section><section className="content-panel"><div className="section-title"><h2>Creator tools</h2></div><div className="tool-grid"><button onClick={()=>setComposerOpen(true)}><Pencil size={19}/><strong>Post composer</strong><span>Write and share an update</span></button><button onClick={()=>go("Explore")}><TrendingUp size={19}/><strong>Discover trends</strong><span>Find relevant conversations</span></button><button onClick={()=>go("AI Assistant")}><Bot size={19}/><strong>Idea assistant</strong><span>Get help with your next idea</span></button></div></section></div>;
   }
   function AssistantPage() { return <div className="assistant-page"><section className="assistant-hero"><div className="assistant-orb"><Sparkles size={28}/></div><span className="welcome-pill">GIST UP AI</span><h2>What are we creating today?</h2><p>Brainstorm post ideas, refine a caption, or find a fresh way to tell your story.</p><div className="prompt-chips">{["Give me post ideas","Improve my caption","Suggest a community topic"].map(x=><button key={x} onClick={()=>setAssistantPrompt(x)}>{x}</button>)}</div></section>{assistantReply&&<div className="assistant-reply"><Avatar initials="AI" tone="lavender"/><div><strong>Gist Up Assistant · Preview</strong><p>{assistantReply}</p><small>This is a local sample response, not a connected AI service.</small></div></div>}<div className="assistant-input"><textarea value={assistantPrompt} onChange={e=>setAssistantPrompt(e.target.value)} placeholder="Tell me what you want help with…"/><button className="primary-button" onClick={()=>{if(assistantPrompt.trim()){setAssistantReply("Here’s a simple way to start: choose one clear idea, write it in your natural voice, and end with a question that invites others to share their perspective. Your prompt: “"+assistantPrompt.trim()+"”. Try making it personal, specific, and welcoming.");}}} disabled={!assistantPrompt.trim()}><Send size={16}/> Ask assistant</button></div></div>; }
-  function AdsManagerPage() { return <div className="screen-stack"><section className="feature-panel"><div><span className="welcome-pill"><Megaphone size={13}/> PROMOTION WORKSPACE</span><h2>Help the right people find you.</h2><p>Plan campaign ideas and keep an overview of drafts before any ad delivery is connected.</p><button className="primary-button" onClick={()=>notify("Campaign creation is a design preview only. No ad will run.")}><Plus size={16}/> Create campaign</button></div><BarChart3 size={56}/></section><div className="stats-grid"><div className="stat-card"><span>Campaign drafts</span><b>0</b><small><FileText size={14}/> Nothing launched</small></div><div className="stat-card"><span>Reach</span><b>—</b><small>Not connected</small></div><div className="stat-card"><span>Spend</span><b>₦0</b><small>No billing connected</small></div></div><section className="content-panel"><h2 className="panel-heading">Campaign workspace</h2><div className="empty-state-box"><Megaphone size={26}/><strong>No campaigns yet</strong><p>Your drafts will appear here. This preview does not run paid promotions or collect payments.</p></div></section></div>; }
+  function AdsManagerPage() {
+    return <div className="screen-stack">
+      <section className="feature-panel"><div><span className="welcome-pill"><Megaphone size={13}/> PROMOTION WORKSPACE</span><h2>Help the right people find you.</h2><p>Build campaign drafts, set a goal, and plan a daily budget before ads are reviewed for delivery.</p><button className="primary-button" onClick={()=>setCampaignModalOpen(true)}><Plus size={16}/> Create campaign</button></div><BarChart3 size={56}/></section>
+      <div className="stats-grid"><div className="stat-card"><span>Campaign drafts</span><b>{campaigns.length}</b><small><FileText size={14}/> Saved to your account</small></div><div className="stat-card"><span>Reach</span><b>—</b><small>Available after ad delivery launches</small></div><div className="stat-card"><span>Spend</span><b>₦0</b><small>No billing or ads are active</small></div></div>
+      <section className="content-panel"><h2 className="panel-heading">Campaign workspace</h2>{campaigns.length?campaigns.map(campaign=><div className="setting-row" key={campaign.id}><div><strong>{campaign.name}</strong><span>{campaign.goal} · ₦{Number(campaign.daily_budget).toLocaleString("en-NG")} per day</span><small>{campaign.audience||"Audience not specified"} · {campaign.status.replace("_"," ")}</small></div><span className="welcome-pill">{campaign.status==="draft"?"DRAFT":campaign.status.toUpperCase()}</span></div>):<div className="empty-state-box"><Megaphone size={26}/><strong>No campaigns yet</strong><p>Create a campaign draft to start planning. Drafts are saved, but they do not run ads or collect payments.</p></div>}</section>
+      {campaignModalOpen&&<div className="modal-backdrop" onClick={()=>setCampaignModalOpen(false)}><section className="composer-modal" role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2>Create campaign</h2><button className="icon-button" onClick={()=>setCampaignModalOpen(false)}><X size={20}/></button></div><p className="muted">Your campaign will be saved as a draft. It will not run or charge you.</p><label className="auth-label">Campaign name<input value={campaignName} onChange={e=>setCampaignName(e.target.value)} maxLength={100} placeholder="e.g. Launch week awareness"/></label><label className="auth-label">Campaign goal<select value={campaignGoal} onChange={e=>setCampaignGoal(e.target.value)}><option>Reach</option><option>Engagement</option><option>Website visits</option><option>Followers</option></select></label><label className="auth-label">Daily budget (₦)<input type="number" min="100" max="100000000" step="100" value={campaignBudget} onChange={e=>setCampaignBudget(e.target.value)}/></label><label className="auth-label">Target audience<input value={campaignAudience} onChange={e=>setCampaignAudience(e.target.value)} maxLength={240} placeholder="e.g. Students and young creators in Lagos"/></label><button className="primary-button auth-main-btn" onClick={createCampaign} disabled={campaignBusy}>{campaignBusy?"Saving…":"Save campaign draft"} <ArrowRight size={16}/></button></section></div>}
+    </div>;
+  }
   function SettingsPage() {
     const tabs=["Account","Privacy","Notifications","Appearance","Blocked accounts","Data & account"];
     return <div className="settings-layout"><section className="settings-menu">{tabs.map(t=><button key={t} className={settingsTab===t?"settings-selected":""} onClick={()=>setSettingsTab(t)}>{t==="Account"?<UserRound size={17}/>:t==="Privacy"?<Shield size={17}/>:t==="Notifications"?<Bell size={17}/>:t==="Appearance"?<Moon size={17}/>:t==="Blocked accounts"?<Ban size={17}/>:<Lock size={17}/>} {t}<ChevronRight size={15}/></button>)}</section><section className="settings-content"><h2>{settingsTab}</h2><p className="muted">Manage how Gist Up works for you.</p>{settingsTab==="Account"&&<><div className="setting-row"><div><strong>Profile information</strong><span>Change your name, handle and bio.</span></div><button className="outline-button compact" onClick={()=>setEditProfile(true)}>Edit profile</button></div><div className="setting-row"><div><strong>Email address</strong><span>{email||"Not connected in preview"}</span></div><button className="text-button" onClick={()=>notify("Email changes require a connected account.")}>Manage</button></div><div className="setting-row"><div><strong>Password & security</strong><span>Sign-in security is not connected yet.</span></div><Lock size={18}/></div></>}{settingsTab==="Privacy"&&<><div className="setting-row"><div><strong>Private account</strong><span>Review who can follow and see your posts.</span></div><button className={"toggle "+(privateAccount?"toggle-on":"")} onClick={()=>setPrivateAccount(!privateAccount)} aria-label="Toggle private account"><i/></button></div><div className="setting-row"><div><strong>Message requests</strong><span>Choose who can start a conversation.</span></div><button className="text-button" onClick={()=>notify("Message request controls are a preview.")}>Manage</button></div><div className="setting-row"><div><strong>Discoverability</strong><span>Control how people find your profile.</span></div><button className="text-button" onClick={()=>notify("Discoverability controls will be connected later.")}>Review</button></div></>}{settingsTab==="Notifications"&&<>{["New followers","Likes and comments","Messages","Community activity"].map(x=><div className="setting-row" key={x}><div><strong>{x}</strong><span>Receive updates about {x.toLowerCase()}.</span></div><button className="toggle toggle-on" onClick={e=>e.currentTarget.classList.toggle("toggle-on")}><i/></button></div>)}</>}{settingsTab==="Appearance"&&<><div className="setting-row"><div><strong>Dark appearance</strong><span>Switch this preview to a darker interface.</span></div><button className={"toggle "+(darkMode?"toggle-on":"")} onClick={()=>{setDarkMode(!darkMode);document.body.classList.toggle("dark-preview",!darkMode)}}><i/></button></div><div className="setting-row"><div><strong>Theme colour</strong><span>Gist Up purple is the current brand theme.</span></div><span className="theme-dot"/></div></>}{settingsTab==="Blocked accounts"&&<>{blocked.length?blocked.map(p=><div className="setting-row" key={p.handle}><Avatar initials={p.initials} tone={p.tone}/><div><strong>{p.name}</strong><span>{p.handle}</span></div><button className="outline-button compact" onClick={()=>toggleBlock(p,false)}>Unblock</button></div>):<div className="empty-state-box"><Ban size={25}/><strong>No blocked accounts</strong><p>People you block will be listed here.</p></div>}<h3 className="subheading">Registered accounts</h3>{people.filter(p=>!blocked.some(b=>b.handle===p.handle)).map(p=><div className="setting-row" key={p.handle}><Avatar initials={p.initials} tone={p.tone}/><div><strong>{p.name}</strong><span>{p.handle}</span></div><button className="outline-button compact" onClick={()=>toggleBlock(p,true)}>Block</button></div>)}{!people.length&&<p className="muted">No other registered accounts to show yet.</p>}</>}{settingsTab==="Data & account"&&<><div className="setting-row"><div><strong>Download your information</strong><span>Account export is not available in this preview.</span></div><button className="text-button" onClick={()=>notify("Data export needs backend support.")}>Request</button></div><div className="setting-row"><div><strong>Deactivate account</strong><span>Temporarily pause your account.</span></div><button className="text-button" onClick={()=>notify("Account actions require a real account.")}>Review</button></div><div className="setting-row danger-row"><div><strong>Delete account</strong><span>Permanent account deletion is not connected.</span></div><button className="text-button" onClick={()=>notify("No account was deleted. Account controls are preview-only.")}><Trash2 size={15}/> Review</button></div></>}</section></div>;
