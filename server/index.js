@@ -251,7 +251,9 @@ app.get("/api/posts", authenticate, async (req, res) => {
       SELECT p.id, p.content, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url,
              (SELECT COUNT(*)::int FROM post_likes pl WHERE pl.post_id = p.id) AS likes,
              (SELECT COUNT(*)::int FROM post_comments pc WHERE pc.post_id = p.id) AS comments,
-             EXISTS(SELECT 1 FROM post_likes mine WHERE mine.post_id = p.id AND mine.user_id = $1) AS is_liked
+             (SELECT COUNT(*)::int FROM post_reposts pr WHERE pr.post_id = p.id) AS reposts,
+             EXISTS(SELECT 1 FROM post_likes mine WHERE mine.post_id = p.id AND mine.user_id = $1) AS is_liked,
+             EXISTS(SELECT 1 FROM post_reposts mine WHERE mine.post_id = p.id AND mine.user_id = $1) AS is_reposted
       FROM posts p
       JOIN users u ON u.id = p.user_id
       WHERE ($2::text <> 'following' OR EXISTS (
@@ -270,7 +272,9 @@ app.get("/api/posts", authenticate, async (req, res) => {
       tone: "lavender",
       likes: row.likes || 0,
       comments: row.comments || 0,
+      reposts: row.reposts || 0,
       isLiked: row.is_liked === true,
+      isReposted: row.is_reposted === true,
       topic: "Community",
       authorId: row.author_id
     })) });
@@ -406,6 +410,24 @@ app.patch("/api/notifications/read-all", authenticate, async (req, res) => {
   } catch (error) {
     console.error("Notifications read update failed:", error?.message || "unknown error");
     return res.status(500).json({ error: "We couldn't update notifications right now." });
+  }
+});
+
+app.post("/api/posts/:id/repost", authenticate, async (req, res) => {
+  const reposted = req.body?.reposted === true;
+  try {
+    const post = await pool.query("SELECT id FROM posts WHERE id = $1 LIMIT 1", [req.params.id]);
+    if (!post.rowCount) return res.status(404).json({ error: "Post not found." });
+    if (reposted) {
+      await pool.query("INSERT INTO post_reposts (user_id, post_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [req.user.id, req.params.id]);
+    } else {
+      await pool.query("DELETE FROM post_reposts WHERE user_id = $1 AND post_id = $2", [req.user.id, req.params.id]);
+    }
+    const count = await pool.query("SELECT COUNT(*)::int AS count FROM post_reposts WHERE post_id = $1", [req.params.id]);
+    return res.json({ reposted, reposts: count.rows[0].count });
+  } catch (error) {
+    console.error("Post repost failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't update this repost right now." });
   }
 });
 
@@ -866,6 +888,15 @@ async function start() {
         )
       `);
       await pool.query("CREATE INDEX IF NOT EXISTS post_comments_post_created_idx ON post_comments (post_id, created_at, id)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS post_reposts (
+          user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id, post_id)
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS post_reposts_post_created_idx ON post_reposts (post_id, created_at DESC)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS saved_posts (
           user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
