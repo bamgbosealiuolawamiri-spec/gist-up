@@ -57,6 +57,14 @@ const authLimiter = rateLimit({
   message: { error: "Too many sign-in attempts. Please wait a little and try again." }
 });
 
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 10,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Gisty AI is getting too many requests. Please wait a minute and try again." }
+});
+
 function requireConfig(res) {
   if (!pool || !JWT_SECRET) {
     res.status(503).json({ error: "The Gist Up account service is not configured yet." });
@@ -304,7 +312,7 @@ app.post("/api/posts", authenticate, async (req, res) => {
 });
 
 
-app.post("/api/ai/chat", authenticate, async (req, res) => {
+app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
   const prompt = String(req.body?.prompt || "").trim();
   if (!prompt) return res.status(400).json({ error: "Write a message for Gisty AI first." });
   if (prompt.length > 2000) return res.status(400).json({ error: "Keep your message under 2,000 characters." });
