@@ -259,6 +259,11 @@ app.get("/api/posts", authenticate, async (req, res) => {
       WHERE ($2::text <> 'following' OR EXISTS (
         SELECT 1 FROM user_follows uf WHERE uf.follower_id = $1 AND uf.followed_id = u.id
       ) OR p.user_id = $1)
+        AND NOT EXISTS (
+          SELECT 1 FROM user_blocks b
+          WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+             OR (b.blocker_id = u.id AND b.blocked_id = $1)
+        )
       ORDER BY p.created_at DESC, p.id DESC
       LIMIT 100
     `, [req.user.id, String(req.query.feed || 'for-you')]);
