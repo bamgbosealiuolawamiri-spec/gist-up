@@ -293,6 +293,7 @@ function App() {
       setHandle("@" + result.profile.username);
       setProfileBio(result.profile.bio || "");
       setEditProfile(false);
+      await loadAppData(result.profile);
       notify("Your profile has been saved.");
     } catch (error) {
       notify(error?.message || "We couldn't save your profile. Please try again.");
