@@ -10,6 +10,8 @@ import rateLimit from "express-rate-limit";
 
 const { Pool } = pg;
 const app = express();
+// Render sits behind one proxy hop; trust that hop for accurate client IP rate limiting.
+app.set("trust proxy", 1);
 const PORT = Number(process.env.PORT || 10000);
 const JWT_SECRET = process.env.JWT_SECRET;
 const DATABASE_URL = process.env.DATABASE_URL;
