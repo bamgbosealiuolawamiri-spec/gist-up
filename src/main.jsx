@@ -852,7 +852,7 @@ function App() {
     </div>;
   }
   function NotificationsPage() {
-    const actionText = { follow: "started following you.", like: "liked your post.", comment: "commented on your post.", message: "sent you a message.", repost: "reposted your post." };
+    const actionText = { follow: "started following you.", like: "liked your post.", comment: "commented on your post.", message: "sent you a message.", repost: "reposted your post." , community: "joined your community." };
     const filtered = notifications.filter(item => notificationFilter === "All" || (notificationFilter === "Follows" && item.type === "follow") || (notificationFilter === "Comments" && item.type === "comment"));
     async function markAllRead() {
       try {
