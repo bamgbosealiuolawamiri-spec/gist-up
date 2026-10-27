@@ -799,13 +799,37 @@ function App() {
     const [title, subtitle] = titleCopy[active] || [active, "Make this space yours."];
     return <div className="page-heading"><div><p className="eyebrow">YOUR PEOPLE. YOUR STORIES.</p><h1>{title}</h1><p className="muted">{subtitle}</p></div>{["Home","Profile"].includes(active) && <button className="primary-button" onClick={() => setComposerOpen(true)}><Plus size={18}/> Create post</button>}</div>;
   }
+  async function sharePost(post) {
+    const shareUrl = new URL(window.location.href);
+    shareUrl.hash = "post-" + post.id;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "Post on Gist Up", text: post.text, url: shareUrl.toString() });
+        return;
+      }
+      if (!navigator.clipboard?.writeText) throw new Error("Sharing isn't available in this browser. Copy the page address from your browser to share it.");
+      await navigator.clipboard.writeText(shareUrl.toString());
+      notify("Post link copied. Share it with your people.");
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      notify(error?.message || "Couldn't share this post. Please try again.");
+    }
+  }
+
+  useEffect(() => {
+    const match = window.location.hash.match(/^#post-(\\d+)$/);
+    if (!match || !posts.some(post => String(post.id) === match[1])) return;
+    const timer = window.setTimeout(() => document.getElementById("post-" + match[1])?.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
+    return () => window.clearTimeout(timer);
+  }, [posts, authUser]);
+
   function PostCard({ post }) {
     const isLiked = liked.includes(post.id);
-    return <article className="post-card" key={post.id}>
+    return <article id={"post-" + post.id} className="post-card" key={post.id}>
       <div className="post-header"><Avatar initials={post.initials} tone={post.tone}/><div className="post-author"><strong>{post.name}</strong><span>{post.handle} · {post.time}</span></div><button className="icon-button post-more" aria-label="Post options" onClick={() => { setReportPost(post); setReportReason("Spam"); setReportDetails(""); }}><MoreHorizontal size={21}/></button></div>
       <p className="post-copy">{post.text}</p><div className="post-tag"># {post.topic || "community"}</div>
       <div className="post-stats"><span>{post.likes} likes</span><span>{post.comments} comments</span></div>
-      <div className="post-actions"><button className={isLiked ? "liked" : ""} onClick={() => toggleLike(post)}><Heart size={18} fill={isLiked ? "currentColor" : "none"}/> Like</button><button onClick={() => openComments(post.id)}><MessageSquare size={18}/> Comment</button><button className={reposted.includes(post.id) ? "liked" : ""} onClick={() => toggleRepost(post)}><Repeat2 size={18}/> {reposted.includes(post.id) ? "Reposted" : "Repost"}{post.reposts ? " · " + post.reposts : ""}</button><button aria-label="Share post" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(window.location.href).catch(()=>{}); notify("Share link copied when clipboard access is available."); }}><Share2 size={18}/></button><button aria-label="Save post" className={saved.includes(post.id) ? "liked" : ""} onClick={() => toggleSave(post)}><Bookmark size={18} fill={saved.includes(post.id) ? "currentColor" : "none"}/></button></div>
+      <div className="post-actions"><button className={isLiked ? "liked" : ""} onClick={() => toggleLike(post)}><Heart size={18} fill={isLiked ? "currentColor" : "none"}/> Like</button><button onClick={() => openComments(post.id)}><MessageSquare size={18}/> Comment</button><button className={reposted.includes(post.id) ? "liked" : ""} onClick={() => toggleRepost(post)}><Repeat2 size={18}/> {reposted.includes(post.id) ? "Reposted" : "Repost"}{post.reposts ? " · " + post.reposts : ""}</button><button aria-label="Share post" onClick={() => sharePost(post)}><Share2 size={18}/></button><button aria-label="Save post" className={saved.includes(post.id) ? "liked" : ""} onClick={() => toggleSave(post)}><Bookmark size={18} fill={saved.includes(post.id) ? "currentColor" : "none"}/></button></div>
     </article>;
   }
   function HomePage() {
