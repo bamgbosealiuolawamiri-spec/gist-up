@@ -25,6 +25,7 @@ function Avatar({ initials, tone = "lavender", size = "" }) { return <div classN
 function App() {
   const [active, setActive] = useState("Home");
   const [liked, setLiked] = useState([]);
+  const [reposted, setReposted] = useState([]);
   const [saved, setSaved] = useState([]);
   const [savedPosts, setSavedPosts] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -143,6 +144,7 @@ function App() {
         const data = await postsResponse.json();
         setPosts(Array.isArray(data.posts) ? data.posts : []);
         setLiked(Array.isArray(data.posts) ? data.posts.filter(post => post.isLiked).map(post => post.id) : []);
+        setReposted(Array.isArray(data.posts) ? data.posts.filter(post => post.isReposted).map(post => post.id) : []);
       } else if (postsResponse.status !== 401) {
         notify("We couldn't load posts right now.");
       }
@@ -417,6 +419,26 @@ function App() {
       setReportBusy(false);
     }
   }
+  async function toggleRepost(post) {
+    const wasReposted = reposted.includes(post.id);
+    setReposted(old => wasReposted ? old.filter(id => id !== post.id) : [...old, post.id]);
+    setPosts(old => old.map(item => item.id === post.id ? { ...item, reposts: Math.max(0, (item.reposts || 0) + (wasReposted ? -1 : 1)) } : item));
+    try {
+      const response = await fetch(API_BASE + "/api/posts/" + post.id + "/repost", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reposted: !wasReposted })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Couldn't update repost.");
+      setReposted(old => result.reposted ? (old.includes(post.id) ? old : [...old, post.id]) : old.filter(id => id !== post.id));
+      setPosts(old => old.map(item => item.id === post.id ? { ...item, reposts: result.reposts } : item));
+      notify(result.reposted ? "Post reposted." : "Repost removed.");
+    } catch (error) {
+      setReposted(old => wasReposted ? (old.includes(post.id) ? old : [...old, post.id]) : old.filter(id => id !== post.id));
+      setPosts(old => old.map(item => item.id === post.id ? { ...item, reposts: Math.max(0, (item.reposts || 0) + (wasReposted ? 1 : -1)) } : item));
+      notify(error?.message || "Couldn't update repost.");
+    }
+  }
   async function toggleSave(post) {
     const wasSaved = saved.includes(post.id);
     setSaved(old => wasSaved ? old.filter(id => id !== post.id) : [...old, post.id]);
@@ -600,7 +622,7 @@ function App() {
       <div className="post-header"><Avatar initials={post.initials} tone={post.tone}/><div className="post-author"><strong>{post.name}</strong><span>{post.handle} · {post.time}</span></div><button className="icon-button post-more" aria-label="Post options" onClick={() => { setReportPost(post); setReportReason("Spam"); setReportDetails(""); }}><MoreHorizontal size={21}/></button></div>
       <p className="post-copy">{post.text}</p><div className="post-tag"># {post.topic || "community"}</div>
       <div className="post-stats"><span>{post.likes} likes</span><span>{post.comments} comments</span></div>
-      <div className="post-actions"><button className={isLiked ? "liked" : ""} onClick={() => toggleLike(post)}><Heart size={18} fill={isLiked ? "currentColor" : "none"}/> Like</button><button onClick={() => openComments(post.id)}><MessageSquare size={18}/> Comment</button><button onClick={() => notify("Repost preview: this action is not yet connected to a server.")}><Repeat2 size={18}/> Repost</button><button aria-label="Share post" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(window.location.href).catch(()=>{}); notify("Share link copied when clipboard access is available."); }}><Share2 size={18}/></button><button aria-label="Save post" className={saved.includes(post.id) ? "liked" : ""} onClick={() => toggleSave(post)}><Bookmark size={18} fill={saved.includes(post.id) ? "currentColor" : "none"}/></button></div>
+      <div className="post-actions"><button className={isLiked ? "liked" : ""} onClick={() => toggleLike(post)}><Heart size={18} fill={isLiked ? "currentColor" : "none"}/> Like</button><button onClick={() => openComments(post.id)}><MessageSquare size={18}/> Comment</button><button className={reposted.includes(post.id) ? "liked" : ""} onClick={() => toggleRepost(post)}><Repeat2 size={18}/> {reposted.includes(post.id) ? "Reposted" : "Repost"}{post.reposts ? " · " + post.reposts : ""}</button><button aria-label="Share post" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(window.location.href).catch(()=>{}); notify("Share link copied when clipboard access is available."); }}><Share2 size={18}/></button><button aria-label="Save post" className={saved.includes(post.id) ? "liked" : ""} onClick={() => toggleSave(post)}><Bookmark size={18} fill={saved.includes(post.id) ? "currentColor" : "none"}/></button></div>
     </article>;
   }
   function HomePage() {
