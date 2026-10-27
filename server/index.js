@@ -844,12 +844,21 @@ app.post("/api/communities/:id/join", authenticate, async (req, res) => {
   const communityId = String(req.params.id || "");
   if (!/^\d+$/.test(communityId)) return res.status(400).json({ error: "Choose a valid community." });
   try {
-    const found = await pool.query("SELECT id FROM communities WHERE id = $1 LIMIT 1", [communityId]);
+    const found = await pool.query("SELECT id, creator_id FROM communities WHERE id = $1 LIMIT 1", [communityId]);
     if (!found.rowCount) return res.status(404).json({ error: "Community not found." });
     const existing = await pool.query("SELECT 1 FROM community_memberships WHERE community_id = $1 AND user_id = $2", [communityId, req.user.id]);
     const joined = !existing.rowCount;
     if (joined) {
       await pool.query("INSERT INTO community_memberships (community_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [communityId, req.user.id]);
+      const creatorId = found.rows[0].creator_id;
+      if (String(creatorId) !== String(req.user.id)) {
+        await pool.query(
+          `INSERT INTO notifications (recipient_id, actor_id, type)
+           SELECT $1, $2, 'community'
+           WHERE COALESCE((SELECT (preferences->>'notificationsCommunities')::boolean FROM user_settings WHERE user_id = $1), TRUE)`,
+          [creatorId, req.user.id]
+        );
+      }
     } else {
       await pool.query("DELETE FROM community_memberships WHERE community_id = $1 AND user_id = $2", [communityId, req.user.id]);
     }
@@ -1139,7 +1148,7 @@ async function start() {
         )
       `);
       await pool.query("ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_type_check");
-      await pool.query("ALTER TABLE notifications ADD CONSTRAINT notifications_type_check CHECK (type IN ('follow', 'like', 'comment', 'message', 'repost'))");
+      await pool.query("ALTER TABLE notifications ADD CONSTRAINT notifications_type_check CHECK (type IN ('follow', 'like', 'comment', 'message', 'repost', 'community'))");
       await pool.query("CREATE INDEX IF NOT EXISTS notifications_recipient_idx ON notifications (recipient_id, created_at DESC, id DESC)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS post_reports (
