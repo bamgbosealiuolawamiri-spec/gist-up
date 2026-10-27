@@ -231,12 +231,15 @@ app.patch("/api/profile/me", authenticate, async (req, res) => {
 app.get("/api/posts", authenticate, async (_req, res) => {
   try {
     const result = await pool.query(`
-      SELECT p.id, p.content, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url
+      SELECT p.id, p.content, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url,
+             (SELECT COUNT(*)::int FROM post_likes pl WHERE pl.post_id = p.id) AS likes,
+             (SELECT COUNT(*)::int FROM post_comments pc WHERE pc.post_id = p.id) AS comments,
+             EXISTS(SELECT 1 FROM post_likes mine WHERE mine.post_id = p.id AND mine.user_id = $1) AS is_liked
       FROM posts p
       JOIN users u ON u.id = p.user_id
       ORDER BY p.created_at DESC, p.id DESC
       LIMIT 100
-    `);
+    `, [req.user.id]);
     res.json({ posts: result.rows.map(row => ({
       id: row.id,
       text: row.content,
@@ -245,8 +248,9 @@ app.get("/api/posts", authenticate, async (_req, res) => {
       time: new Date(row.created_at).toLocaleString(),
       initials: row.full_name.split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
       tone: "lavender",
-      likes: 0,
-      comments: 0,
+      likes: row.likes || 0,
+      comments: row.comments || 0,
+      isLiked: row.is_liked === true,
       topic: "Community",
       authorId: row.author_id
     })) });
@@ -287,6 +291,61 @@ app.post("/api/posts", authenticate, async (req, res) => {
   }
 });
 
+
+app.post("/api/posts/:id/like", authenticate, async (req, res) => {
+  try {
+    const post = await pool.query("SELECT id FROM posts WHERE id = $1 LIMIT 1", [req.params.id]);
+    if (!post.rowCount) return res.status(404).json({ error: "Post not found." });
+    const existing = await pool.query("SELECT 1 FROM post_likes WHERE user_id = $1 AND post_id = $2 LIMIT 1", [req.user.id, req.params.id]);
+    let liked;
+    if (existing.rowCount) {
+      await pool.query("DELETE FROM post_likes WHERE user_id = $1 AND post_id = $2", [req.user.id, req.params.id]);
+      liked = false;
+    } else {
+      await pool.query("INSERT INTO post_likes (user_id, post_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [req.user.id, req.params.id]);
+      liked = true;
+    }
+    const count = await pool.query("SELECT COUNT(*)::int AS count FROM post_likes WHERE post_id = $1", [req.params.id]);
+    return res.json({ liked, likes: count.rows[0].count });
+  } catch (error) {
+    console.error("Post like failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't update that like right now." });
+  }
+});
+
+app.get("/api/posts/:id/comments", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT c.id, c.content, c.created_at, u.id AS user_id, u.full_name, u.username
+      FROM post_comments c JOIN users u ON u.id = c.user_id
+      WHERE c.post_id = $1
+      ORDER BY c.created_at ASC, c.id ASC
+      LIMIT 200
+    `, [req.params.id]);
+    return res.json({ comments: result.rows });
+  } catch (error) {
+    console.error("Post comments fetch failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't load comments right now." });
+  }
+});
+
+app.post("/api/posts/:id/comments", authenticate, async (req, res) => {
+  const content = String(req.body?.content || "").trim();
+  if (!content) return res.status(400).json({ error: "Write a comment first." });
+  if (content.length > 2000) return res.status(400).json({ error: "Comments must be 2,000 characters or fewer." });
+  try {
+    const result = await pool.query(`
+      INSERT INTO post_comments (post_id, user_id, content)
+      SELECT p.id, $2, $3 FROM posts p WHERE p.id = $1
+      RETURNING id, post_id, user_id, content, created_at
+    `, [req.params.id, req.user.id, content]);
+    if (!result.rowCount) return res.status(404).json({ error: "Post not found." });
+    return res.status(201).json({ comment: { ...result.rows[0], full_name: req.user.full_name, username: req.user.username } });
+  } catch (error) {
+    console.error("Post comment failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't publish that comment right now." });
+  }
+});
 
 app.get("/api/users", authenticate, async (req, res) => {
   const search = String(req.query.search || "").trim().slice(0, 80);
@@ -480,6 +539,24 @@ async function start() {
         )
       `);
       await pool.query("CREATE INDEX IF NOT EXISTS posts_created_at_idx ON posts (created_at DESC, id DESC)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS post_likes (
+          user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id, post_id)
+        )
+      `);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS post_comments (
+          id BIGSERIAL PRIMARY KEY,
+          post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+          user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          content TEXT NOT NULL CHECK (char_length(content) BETWEEN 1 AND 2000),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS post_comments_post_created_idx ON post_comments (post_id, created_at, id)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS conversations (
           id BIGSERIAL PRIMARY KEY,
