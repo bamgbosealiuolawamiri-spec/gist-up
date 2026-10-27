@@ -304,6 +304,43 @@ app.post("/api/posts", authenticate, async (req, res) => {
 });
 
 
+app.get("/api/ads/campaigns", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, name, goal, daily_budget, audience, status, created_at FROM ad_campaigns WHERE advertiser_id = $1 ORDER BY created_at DESC, id DESC LIMIT 100",
+      [req.user.id]
+    );
+    return res.json({ campaigns: result.rows });
+  } catch (error) {
+    console.error("Campaigns fetch failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't load campaigns right now." });
+  }
+});
+
+app.post("/api/ads/campaigns", authenticate, async (req, res) => {
+  const name = String(req.body?.name || "").trim();
+  const goal = String(req.body?.goal || "").trim();
+  const audience = String(req.body?.audience || "").trim();
+  const dailyBudget = Number(req.body?.dailyBudget);
+  const allowedGoals = ["Reach", "Engagement", "Website visits", "Followers"];
+  if (name.length < 3 || name.length > 100) return res.status(400).json({ error: "Campaign name must be 3–100 characters." });
+  if (!allowedGoals.includes(goal)) return res.status(400).json({ error: "Choose a valid campaign goal." });
+  if (!Number.isFinite(dailyBudget) || dailyBudget < 100 || dailyBudget > 100000000) {
+    return res.status(400).json({ error: "Daily budget must be between ₦100 and ₦100,000,000." });
+  }
+  if (audience.length > 240) return res.status(400).json({ error: "Audience description must be 240 characters or fewer." });
+  try {
+    const result = await pool.query(
+      "INSERT INTO ad_campaigns (advertiser_id, name, goal, daily_budget, audience, status) VALUES ($1, $2, $3, $4, $5, 'draft') RETURNING id, name, goal, daily_budget, audience, status, created_at",
+      [req.user.id, name, goal, dailyBudget, audience]
+    );
+    return res.status(201).json({ campaign: result.rows[0] });
+  } catch (error) {
+    console.error("Campaign creation failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't save this campaign right now." });
+  }
+});
+
 app.get("/api/notifications", authenticate, async (req, res) => {
   try {
     const result = await pool.query(
@@ -784,6 +821,19 @@ async function start() {
         )
       `);
       await pool.query("CREATE INDEX IF NOT EXISTS notifications_recipient_idx ON notifications (recipient_id, created_at DESC, id DESC)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS ad_campaigns (
+          id BIGSERIAL PRIMARY KEY,
+          advertiser_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          name VARCHAR(100) NOT NULL,
+          goal VARCHAR(40) NOT NULL,
+          daily_budget NUMERIC(12, 2) NOT NULL CHECK (daily_budget > 0),
+          audience VARCHAR(240) NOT NULL DEFAULT '',
+          status VARCHAR(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'pending_review', 'approved', 'rejected', 'paused')),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS ad_campaigns_advertiser_created_idx ON ad_campaigns (advertiser_id, created_at DESC)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS conversations (
           id BIGSERIAL PRIMARY KEY,
