@@ -25,6 +25,7 @@ function Avatar({ initials, tone = "lavender", size = "" }) { return <div classN
 function App() {
   const [active, setActive] = useState("Home");
   const [liked, setLiked] = useState([]);
+  const [likedPosts, setLikedPosts] = useState([]);
   const [reposted, setReposted] = useState([]);
   const [saved, setSaved] = useState([]);
   const [savedPosts, setSavedPosts] = useState([]);
@@ -89,7 +90,7 @@ function App() {
 
   async function loadAppData(fallbackUser = null) {
     try {
-      const [profileResponse, postsResponse, usersResponse, followingResponse, blocksResponse, savedResponse, notificationsResponse, campaignsResponse] = await Promise.all([
+      const [profileResponse, postsResponse, usersResponse, followingResponse, blocksResponse, savedResponse, notificationsResponse, campaignsResponse, likesResponse] = await Promise.all([
         fetch(API_BASE + "/api/profile/me", { credentials: "include" }),
         fetch(API_BASE + "/api/posts?feed=" + encodeURIComponent(feedMode), { credentials: "include" }),
         fetch(API_BASE + "/api/users", { credentials: "include" }),
@@ -97,7 +98,8 @@ function App() {
         fetch(API_BASE + "/api/blocks/me", { credentials: "include" }),
         fetch(API_BASE + "/api/saved", { credentials: "include" }),
         fetch(API_BASE + "/api/notifications", { credentials: "include" }),
-        fetch(API_BASE + "/api/ads/campaigns", { credentials: "include" })
+        fetch(API_BASE + "/api/ads/campaigns", { credentials: "include" }),
+        fetch(API_BASE + "/api/likes/me", { credentials: "include" })
       ]);
       let user = fallbackUser;
       if (profileResponse.ok) {
@@ -153,6 +155,12 @@ function App() {
         const items = Array.isArray(savedData.posts) ? savedData.posts : [];
         setSavedPosts(items);
         setSaved(items.map(post => post.id));
+      }
+      if (likesResponse.ok) {
+        const likesData = await likesResponse.json().catch(() => ({}));
+        const items = Array.isArray(likesData.posts) ? likesData.posts : [];
+        setLikedPosts(items);
+        setLiked(items.map(post => post.id));
       }
       if (notificationsResponse.ok) {
         const notificationsData = await notificationsResponse.json().catch(() => ({}));
@@ -300,6 +308,7 @@ function App() {
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "Couldn't update like.");
       setLiked(old => result.liked ? (old.includes(post.id) ? old : [...old, post.id]) : old.filter(id => id !== post.id));
+      setLikedPosts(old => result.liked ? (old.some(item => item.id === post.id) ? old : [{ ...post, isLiked: true, likes: result.likes }, ...old]) : old.filter(item => item.id !== post.id));
       setPosts(old => old.map(item => item.id === post.id ? { ...item, likes: result.likes } : item));
     } catch (error) {
       setLiked(old => currentlyLiked ? (old.includes(post.id) ? old : [...old, post.id]) : old.filter(id => id !== post.id));
@@ -694,7 +703,7 @@ function App() {
   function SavedPage() { return <div className="screen-stack">{savedPosts.length?savedPosts.map(post=><PostCard post={post} key={post.id}/>):<div className="empty-panel"><div className="placeholder-icon"><Bookmark size={27}/></div><h2>Your saved posts live here</h2><p>Tap the bookmark on a post to keep it close for later.</p><button className="primary-button" onClick={()=>go("Home")}>Explore your feed <ArrowRight size={16}/></button></div>}</div>; }
   function ProfilePage() {
     const myPosts = posts.filter(p => p.handle === handle);
-    const visibleProfilePosts = profileTab === "Likes" ? posts.filter(p => liked.includes(p.id)) : myPosts;
+    const visibleProfilePosts = profileTab === "Likes" ? likedPosts : myPosts;
     const emptyTitle = profileTab === "Posts" ? "Your story starts with a post" : profileTab === "Likes" ? "No liked posts yet" : profileTab + " will appear here";
     const emptyCopy = profileTab === "Posts" ? "Share something with your community to get started." : profileTab === "Likes" ? "Posts you like will appear here so you can find them again." : "This profile section will become available as more content features are added.";
     return <div className="screen-stack"><section className="profile-page-card"><div className="profile-page-cover"><button className="cover-edit" onClick={()=>notify("Cover photo uploads are planned for a later update.")}><Camera size={15}/> Edit cover</button></div><div className="profile-page-body"><Avatar initials={myInitials} size="profile-avatar"/><button className="outline-button edit-profile-button" onClick={()=>setEditProfile(true)}><Pencil size={14}/> Edit profile</button><h2>{displayName}</h2><span className="profile-handle">{handle}</span><p>{profileBio}</p><div className="profile-page-stats"><span><b>{myPosts.length}</b> posts</span><span><b>{following.length}</b> following</span><span><b>{followerCount}</b> followers</span></div><div className="profile-tabs">{["Posts","Replies","Media","Likes"].map(t=><button className={profileTab===t?"tab-active":""} onClick={()=>setProfileTab(t)} key={t}>{t}</button>)}</div></div></section>{(profileTab==="Posts"||profileTab==="Likes")&&visibleProfilePosts.length ? visibleProfilePosts.map(post=><PostCard post={post} key={post.id}/>) : <div className="empty-panel compact-empty"><h3>{emptyTitle}</h3><p>{emptyCopy}</p>{profileTab==="Posts"&&<button className="primary-button" onClick={()=>setComposerOpen(true)}><Plus size={16}/> Create post</button>}</div>}</div>;
