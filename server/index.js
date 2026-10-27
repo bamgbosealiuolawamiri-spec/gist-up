@@ -743,7 +743,7 @@ app.post("/api/communities", authenticate, async (req, res) => {
 
 app.post("/api/communities/:id/join", authenticate, async (req, res) => {
   const communityId = String(req.params.id || "");
-  if (!/^\\d+$/.test(communityId)) return res.status(400).json({ error: "Choose a valid community." });
+  if (!/^\d+$/.test(communityId)) return res.status(400).json({ error: "Choose a valid community." });
   try {
     const found = await pool.query("SELECT id FROM communities WHERE id = $1 LIMIT 1", [communityId]);
     if (!found.rowCount) return res.status(404).json({ error: "Community not found." });
