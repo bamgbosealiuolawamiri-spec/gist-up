@@ -706,6 +706,62 @@ app.get("/api/follows/me", authenticate, async (req, res) => {
   }
 });
 
+app.get("/api/communities", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT c.id, c.name, c.description, c.created_at, u.full_name AS creator_name,
+              (SELECT COUNT(*)::int FROM community_memberships cm WHERE cm.community_id = c.id) AS member_count,
+              EXISTS(SELECT 1 FROM community_memberships mine WHERE mine.community_id = c.id AND mine.user_id = $1) AS is_member
+       FROM communities c JOIN users u ON u.id = c.creator_id
+       ORDER BY member_count DESC, c.created_at DESC, c.id DESC LIMIT 100`,
+      [req.user.id]
+    );
+    return res.json({ communities: result.rows });
+  } catch (error) {
+    console.error("Communities fetch failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't load communities right now." });
+  }
+});
+
+app.post("/api/communities", authenticate, async (req, res) => {
+  const name = String(req.body?.name || "").trim();
+  const description = String(req.body?.description || "").trim();
+  if (name.length < 3 || name.length > 70) return res.status(400).json({ error: "Community name must be 3–70 characters." });
+  if (description.length < 10 || description.length > 300) return res.status(400).json({ error: "Description must be 10–300 characters." });
+  try {
+    const result = await pool.query(
+      "INSERT INTO communities (creator_id, name, description) VALUES ($1, $2, $3) RETURNING id, name, description, created_at",
+      [req.user.id, name, description]
+    );
+    await pool.query("INSERT INTO community_memberships (community_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [result.rows[0].id, req.user.id]);
+    return res.status(201).json({ community: { ...result.rows[0], creator_name: req.user.full_name, member_count: 1, is_member: true } });
+  } catch (error) {
+    console.error("Community creation failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't create this community right now." });
+  }
+});
+
+app.post("/api/communities/:id/join", authenticate, async (req, res) => {
+  const communityId = String(req.params.id || "");
+  if (!/^\\d+$/.test(communityId)) return res.status(400).json({ error: "Choose a valid community." });
+  try {
+    const found = await pool.query("SELECT id FROM communities WHERE id = $1 LIMIT 1", [communityId]);
+    if (!found.rowCount) return res.status(404).json({ error: "Community not found." });
+    const existing = await pool.query("SELECT 1 FROM community_memberships WHERE community_id = $1 AND user_id = $2", [communityId, req.user.id]);
+    const joined = !existing.rowCount;
+    if (joined) {
+      await pool.query("INSERT INTO community_memberships (community_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [communityId, req.user.id]);
+    } else {
+      await pool.query("DELETE FROM community_memberships WHERE community_id = $1 AND user_id = $2", [communityId, req.user.id]);
+    }
+    const count = await pool.query("SELECT COUNT(*)::int AS count FROM community_memberships WHERE community_id = $1", [communityId]);
+    return res.json({ joined, member_count: count.rows[0].count });
+  } catch (error) {
+    console.error("Community membership update failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't update community membership right now." });
+  }
+});
+
 app.get("/api/conversations", authenticate, async (req, res) => {
   const includeArchived = String(req.query.archived || "false") === "true";
   try {
@@ -899,6 +955,25 @@ async function start() {
         )
       `);
       await pool.query("CREATE INDEX IF NOT EXISTS user_follows_followed_idx ON user_follows (followed_id, created_at DESC)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS communities (
+          id BIGSERIAL PRIMARY KEY,
+          creator_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          name VARCHAR(70) NOT NULL,
+          description VARCHAR(300) NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS communities_name_unique ON communities (lower(name))");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS community_memberships (
+          community_id BIGINT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (community_id, user_id)
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS community_memberships_user_idx ON community_memberships (user_id, joined_at DESC)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS user_blocks (
           blocker_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
