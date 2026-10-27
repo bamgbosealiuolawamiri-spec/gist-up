@@ -44,6 +44,10 @@ function App() {
   const [postText, setPostText] = useState("");
   const [commentText, setCommentText] = useState("");
   const [commentPost, setCommentPost] = useState(null);
+  const [reportPost, setReportPost] = useState(null);
+  const [reportReason, setReportReason] = useState("Spam");
+  const [reportDetails, setReportDetails] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
   const [postComments, setPostComments] = useState([]);
   const [commentsBusy, setCommentsBusy] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -394,6 +398,25 @@ function App() {
       setCampaignBusy(false);
     }
   }
+  async function submitReport() {
+    if (!reportPost || reportBusy) return;
+    setReportBusy(true);
+    try {
+      const response = await fetch(API_BASE + "/api/posts/" + reportPost.id + "/report", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reportReason, details: reportDetails.trim() })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Couldn't submit your report.");
+      setReportPost(null);
+      setReportDetails("");
+      notify("Thanks. Your report has been sent for review.");
+    } catch (error) {
+      notify(error?.message || "Couldn't submit your report.");
+    } finally {
+      setReportBusy(false);
+    }
+  }
   async function toggleSave(post) {
     const wasSaved = saved.includes(post.id);
     setSaved(old => wasSaved ? old.filter(id => id !== post.id) : [...old, post.id]);
@@ -574,7 +597,7 @@ function App() {
   function PostCard({ post }) {
     const isLiked = liked.includes(post.id);
     return <article className="post-card" key={post.id}>
-      <div className="post-header"><Avatar initials={post.initials} tone={post.tone}/><div className="post-author"><strong>{post.name}</strong><span>{post.handle} · {post.time}</span></div><button className="icon-button post-more" aria-label="Post options" onClick={() => notify("More post options will be available here.")}><MoreHorizontal size={21}/></button></div>
+      <div className="post-header"><Avatar initials={post.initials} tone={post.tone}/><div className="post-author"><strong>{post.name}</strong><span>{post.handle} · {post.time}</span></div><button className="icon-button post-more" aria-label="Post options" onClick={() => { setReportPost(post); setReportReason("Spam"); setReportDetails(""); }}><MoreHorizontal size={21}/></button></div>
       <p className="post-copy">{post.text}</p><div className="post-tag"># {post.topic || "community"}</div>
       <div className="post-stats"><span>{post.likes} likes</span><span>{post.comments} comments</span></div>
       <div className="post-actions"><button className={isLiked ? "liked" : ""} onClick={() => toggleLike(post)}><Heart size={18} fill={isLiked ? "currentColor" : "none"}/> Like</button><button onClick={() => openComments(post.id)}><MessageSquare size={18}/> Comment</button><button onClick={() => notify("Repost preview: this action is not yet connected to a server.")}><Repeat2 size={18}/> Repost</button><button aria-label="Share post" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(window.location.href).catch(()=>{}); notify("Share link copied when clipboard access is available."); }}><Share2 size={18}/></button><button aria-label="Save post" className={saved.includes(post.id) ? "liked" : ""} onClick={() => toggleSave(post)}><Bookmark size={18} fill={saved.includes(post.id) ? "currentColor" : "none"}/></button></div>
@@ -685,6 +708,7 @@ function App() {
     <main className="feed-column"><HeaderTitle/>{page}</main>
     <aside className="right-sidebar"><section className="right-card profile-card"><div className="profile-cover"/><div className="profile-card-body"><Avatar initials={myInitials} size="large"/><strong>{displayName}</strong><span>{handle}</span><p>{profileBio}</p><div className="profile-metrics"><div><b>{following.length}</b><span>Following</span></div><div><b>{followerCount}</b><span>Followers</span></div><div><b>{posts.filter(p=>p.handle===handle).length}</b><span>Posts</span></div></div><button className="outline-button" onClick={()=>go("Profile")}>View profile</button></div></section><section className="right-card trends-card"><div className="right-card-heading"><h3><TrendingUp size={17}/> What's happening</h3><button onClick={()=>go("Explore")}>See all</button></div>{[["#CreativeCommunity","2.4k posts","Creators"],["#MondayMotivation","1.8k posts","Lifestyle"],["#DesignTalk","956 posts","Technology"]].map(([tag,count,category])=><button className="trend-row" key={tag} onClick={()=>{setQuery(tag);go("Explore")}}><span>{category} · Trending</span><strong>{tag}</strong><small>{count}</small></button>)}</section><section className="right-card suggestions-card"><div className="right-card-heading"><h3>People to know</h3><button onClick={()=>go("Explore")}>See all</button></div>{people.slice(0,3).map(p=><div className="suggestion-row" key={p.handle}><Avatar initials={p.initials} tone={p.tone}/><div className="suggestion-info"><strong>{p.name}</strong><span>{p.handle}</span></div><button className="follow-button" onClick={()=>toggleFollow(p)}>{following.includes(p.handle)?"Following":"Follow"}</button></div>)}</section><footer className="right-footer">About · Help · Community Guidelines<br/>Privacy · Terms · Cookies<br/><span>© 2026 Gist Up</span></footer></aside></div>
     {composerOpen&&<div className="modal-backdrop" onClick={()=>setComposerOpen(false)}><section className="composer-modal" role="dialog" aria-modal="true" aria-labelledby="composer-title" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2 id="composer-title">Create a post</h2><button className="icon-button" aria-label="Close" onClick={()=>setComposerOpen(false)}><X size={20}/></button></div><div className="modal-user"><Avatar initials={myInitials} size="medium"/><div><strong>{displayName}</strong><span>Sharing with everyone</span></div></div><textarea autoFocus value={postText} onChange={e=>setPostText(e.target.value)} placeholder="What's on your mind?" maxLength={5000}/><div className="modal-bottom"><span>{postText.length}/5000</span><button className="primary-button" disabled={!postText.trim()||postBusy} onClick={publish}>{postBusy?"Publishing…":"Publish post"} <ArrowRight size={16}/></button></div><p className="preview-note">Your post will be saved to your Gist Up account.</p></section></div>}
+    {reportPost&&<div className="modal-backdrop" onClick={()=>setReportPost(null)}><section className="composer-modal edit-modal" role="dialog" aria-modal="true" aria-labelledby="report-title" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2 id="report-title">Report post</h2><button className="icon-button" aria-label="Close report dialog" onClick={()=>setReportPost(null)}><X size={20}/></button></div><p className="muted">Tell us why this post may violate Gist Up's community guidelines. Reports are saved for review.</p><label className="auth-label">Reason<select value={reportReason} onChange={e=>setReportReason(e.target.value)}><option>Spam</option><option>Harassment or bullying</option><option>Hate or abuse</option><option>False information</option><option>Other</option></select></label><label className="auth-label">Additional details (optional)<textarea value={reportDetails} onChange={e=>setReportDetails(e.target.value)} maxLength={500} placeholder="Share any context that may help the review."/></label><button className="primary-button auth-main-btn" onClick={submitReport} disabled={reportBusy}>{reportBusy?"Sending report…":"Submit report"} <ArrowRight size={16}/></button></section></div>}
     {commentPost!==null&&<div className="modal-backdrop" onClick={()=>setCommentPost(null)}><section className="composer-modal" role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2>Comments</h2><button className="icon-button" onClick={()=>setCommentPost(null)}><X size={20}/></button></div><p className="muted">Comments are saved to this post.</p><div className="post-comments-list">{commentsBusy?<p className="muted">Loading comments…</p>:postComments.length?postComments.map(comment=><div className="saved-comment" key={comment.id}><strong>{comment.full_name || comment.username}</strong><p>{comment.content}</p><small>{new Date(comment.created_at).toLocaleString()}</small></div>):<p className="muted">No comments yet. Start the conversation.</p>}</div><div className="comment-input"><input value={commentText} onChange={e=>setCommentText(e.target.value)} maxLength={2000} placeholder="Write a comment…"/><button className="primary-button" onClick={submitComment} disabled={!commentText.trim()}><Send size={15}/></button></div></section></div>}
     {editProfile&&<div className="modal-backdrop" onClick={()=>setEditProfile(false)}><section className="composer-modal edit-modal" role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2>Edit profile</h2><button className="icon-button" onClick={()=>setEditProfile(false)}><X size={20}/></button></div><label className="auth-label">Display name<input value={displayName} onChange={e=>setDisplayName(e.target.value)} maxLength={50}/></label><label className="auth-label">Username<input value={handle} onChange={e=>setHandle(e.target.value.startsWith("@")?e.target.value:"@"+e.target.value)} maxLength={30}/></label><label className="auth-label">Bio<textarea value={profileBio} onChange={e=>setProfileBio(e.target.value)} maxLength={160}/></label><button className="primary-button auth-main-btn" onClick={saveProfile}><Check size={16}/> Save changes</button><p className="preview-note">Your display name, username, and bio will be saved to your account.</p></section></div>}
   </div>;
