@@ -74,10 +74,11 @@ function App() {
 
   async function loadAppData(fallbackUser = null) {
     try {
-      const [profileResponse, postsResponse, usersResponse] = await Promise.all([
+      const [profileResponse, postsResponse, usersResponse, followingResponse] = await Promise.all([
         fetch(API_BASE + "/api/profile/me", { credentials: "include" }),
         fetch(API_BASE + "/api/posts?feed=" + encodeURIComponent(feedMode), { credentials: "include" }),
-        fetch(API_BASE + "/api/users", { credentials: "include" })
+        fetch(API_BASE + "/api/users", { credentials: "include" }),
+        fetch(API_BASE + "/api/follows/me", { credentials: "include" })
       ]);
       let user = fallbackUser;
       if (profileResponse.ok) {
@@ -105,6 +106,11 @@ function App() {
         }));
         setPeople(mapped);
         setFollowing(mapped.filter(person => person.isFollowing).map(person => person.handle));
+      }
+      if (followingResponse.ok) {
+        const followingData = await followingResponse.json().catch(() => ({}));
+        const handles = (Array.isArray(followingData.users) ? followingData.users : []).map(person => "@" + person.username);
+        setFollowing(handles);
       }
       if (postsResponse.ok) {
         const data = await postsResponse.json();
