@@ -304,6 +304,40 @@ app.post("/api/posts", authenticate, async (req, res) => {
 });
 
 
+app.post("/api/ai/chat", authenticate, async (req, res) => {
+  const prompt = String(req.body?.prompt || "").trim();
+  if (!prompt) return res.status(400).json({ error: "Write a message for Gisty AI first." });
+  if (prompt.length > 2000) return res.status(400).json({ error: "Keep your message under 2,000 characters." });
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return res.status(503).json({ error: "Gisty AI is wired into Gist Up, but its AI provider key still needs to be configured." });
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "You are Gisty AI, the helpful creative sidekick inside Gist Up. Help people brainstorm social posts, improve captions, plan community conversations, and express ideas clearly. Be friendly, concise, inclusive, and practical. Do not claim to have performed actions in the app. If asked for facts that may be outdated, be transparent about uncertainty." },
+          { role: "user", content: prompt }
+        ],
+        max_tokens: 600,
+        temperature: 0.7
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error("AI provider request failed:", response.status, data?.error?.type || "provider_error");
+      return res.status(502).json({ error: "Gisty AI couldn't respond right now. Please try again shortly." });
+    }
+    const reply = String(data?.choices?.[0]?.message?.content || "").trim();
+    if (!reply) return res.status(502).json({ error: "Gisty AI returned an empty reply. Please try again." });
+    return res.json({ reply });
+  } catch (error) {
+    console.error("AI request failed:", error?.message || "unknown error");
+    return res.status(502).json({ error: "Gisty AI couldn't connect right now. Please try again shortly." });
+  }
+});
+
 app.get("/api/ads/campaigns", authenticate, async (req, res) => {
   try {
     const result = await pool.query(
