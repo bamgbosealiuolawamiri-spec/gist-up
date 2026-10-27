@@ -77,6 +77,11 @@ function App() {
   const [assistantReply, setAssistantReply] = useState("");
   const [assistantBusy, setAssistantBusy] = useState(false);
   const [communityJoined, setCommunityJoined] = useState([]);
+  const [communities, setCommunities] = useState([]);
+  const [communityFormOpen, setCommunityFormOpen] = useState(false);
+  const [communityName, setCommunityName] = useState("");
+  const [communityDescription, setCommunityDescription] = useState("");
+  const [communityBusy, setCommunityBusy] = useState(false);
   const [blocked, setBlocked] = useState([]);
   const [profileBio, setProfileBio] = useState("Your story starts here. Add a bio and let people get to know you.");
   const [editProfile, setEditProfile] = useState(false);
@@ -90,7 +95,7 @@ function App() {
 
   async function loadAppData(fallbackUser = null) {
     try {
-      const [profileResponse, postsResponse, usersResponse, followingResponse, blocksResponse, savedResponse, notificationsResponse, campaignsResponse, likesResponse] = await Promise.all([
+      const [profileResponse, postsResponse, usersResponse, followingResponse, blocksResponse, savedResponse, notificationsResponse, campaignsResponse, likesResponse, communitiesResponse] = await Promise.all([
         fetch(API_BASE + "/api/profile/me", { credentials: "include" }),
         fetch(API_BASE + "/api/posts?feed=" + encodeURIComponent(feedMode), { credentials: "include" }),
         fetch(API_BASE + "/api/users", { credentials: "include" }),
@@ -99,7 +104,8 @@ function App() {
         fetch(API_BASE + "/api/saved", { credentials: "include" }),
         fetch(API_BASE + "/api/notifications", { credentials: "include" }),
         fetch(API_BASE + "/api/ads/campaigns", { credentials: "include" }),
-        fetch(API_BASE + "/api/likes/me", { credentials: "include" })
+        fetch(API_BASE + "/api/likes/me", { credentials: "include" }),
+        fetch(API_BASE + "/api/communities", { credentials: "include" })
       ]);
       let user = fallbackUser;
       if (profileResponse.ok) {
@@ -169,6 +175,12 @@ function App() {
       if (campaignsResponse.ok) {
         const campaignsData = await campaignsResponse.json().catch(() => ({}));
         setCampaigns(Array.isArray(campaignsData.campaigns) ? campaignsData.campaigns : []);
+      }
+      if (communitiesResponse.ok) {
+        const communityData = await communitiesResponse.json().catch(() => ({}));
+        const items = Array.isArray(communityData.communities) ? communityData.communities : [];
+        setCommunities(items);
+        setCommunityJoined(items.filter(item => item.is_member).map(item => String(item.id)));
       }
     } catch {
       notify("Couldn't refresh your profile and feed. Please try again.");
@@ -386,6 +398,50 @@ function App() {
       setAssistantBusy(false);
     }
   }
+  async function createCommunity() {
+    if (communityBusy) return;
+    setCommunityBusy(true);
+    try {
+      const response = await fetch(API_BASE + "/api/communities", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: communityName.trim(), description: communityDescription.trim() })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Couldn't create community.");
+      const item = result.community;
+      setCommunities(old => [item, ...old.filter(existing => String(existing.id) !== String(item.id))]);
+      setCommunityJoined(old => old.includes(String(item.id)) ? old : [...old, String(item.id)]);
+      setCommunityName("");
+      setCommunityDescription("");
+      setCommunityFormOpen(false);
+      notify("Community created.");
+    } catch (error) {
+      notify(error?.message || "Couldn't create community.");
+    } finally {
+      setCommunityBusy(false);
+    }
+  }
+
+  async function toggleCommunityMembership(community) {
+    const id = String(community.id);
+    const wasJoined = communityJoined.includes(id);
+    setCommunityJoined(old => wasJoined ? old.filter(value => value !== id) : [...old, id]);
+    setCommunities(old => old.map(item => String(item.id) === id ? { ...item, is_member: !wasJoined, member_count: Math.max(0, Number(item.member_count || 0) + (wasJoined ? -1 : 1)) } : item));
+    try {
+      const response = await fetch(API_BASE + "/api/communities/" + encodeURIComponent(id) + "/join", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({})
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Couldn't update membership.");
+      setCommunityJoined(old => result.joined ? (old.includes(id) ? old : [...old, id]) : old.filter(value => value !== id));
+      setCommunities(old => old.map(item => String(item.id) === id ? { ...item, is_member: result.joined, member_count: result.member_count } : item));
+    } catch (error) {
+      setCommunityJoined(old => wasJoined ? (old.includes(id) ? old : [...old, id]) : old.filter(value => value !== id));
+      setCommunities(old => old.map(item => String(item.id) === id ? { ...item, is_member: wasJoined, member_count: Math.max(0, Number(item.member_count || 0) + (wasJoined ? 1 : -1)) } : item));
+      notify(error?.message || "Couldn't update membership.");
+    }
+  }
+
   async function createCampaign() {
     const name = campaignName.trim();
     if (name.length < 3) { notify("Give your campaign a name of at least 3 characters."); return; }
@@ -657,8 +713,8 @@ function App() {
     return <div className="screen-stack"><div className="search-large"><Search size={19}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search people, topics, and communities"/></div><section className="feature-panel explore-feature"><div><span className="welcome-pill"><Flame size={13}/> DISCOVER</span><h2>What's your next conversation?</h2><p>Find registered members and posts from your Gist Up community.</p></div><Compass size={54}/></section><section className="content-panel"><div className="section-title"><h2>People you might like</h2><span>{filteredPeople.length} suggestions</span></div>{filteredPeople.map(p=><div className="person-row" key={p.handle}><Avatar initials={p.initials} tone={p.tone}/><div className="person-copy"><strong>{p.name}</strong><span>{p.handle}</span><p>{p.bio}</p></div><button className={following.includes(p.handle)?"follow-button following":"follow-button"} onClick={()=>toggleFollow(p)}>{following.includes(p.handle)?"Following":"Follow"}</button></div>)}{!filteredPeople.length&&<p className="empty-state">No registered people match this search yet.</p>}</section><section className="content-panel"><div className="section-title"><h2>Topics in your feed</h2><span>From real posts</span></div>{trendingTopics.length?<div className="topic-grid">{trendingTopics.map(([tag,count,category])=><button className="topic-card" key={tag} onClick={()=>setQuery(tag.replace("#",""))}><span>{category}</span><strong>{tag}</strong><small>{count}</small><ArrowUpRight size={16}/></button>)}</div>:<div className="empty-state-box"><Hash size={24}/><strong>No topics to show yet</strong><p>Topics will appear here as people publish posts with hashtags or topic labels.</p></div>}</section><section className="content-panel"><div className="section-title"><h2>{query.trim()?"Matching posts":"Posts worth a look"}</h2><span>{matchingPosts.length} posts</span></div>{matchingPosts.slice(0,5).map(post=><PostCard post={post} key={post.id}/>)}{!matchingPosts.length&&<p className="empty-state">No posts match this search yet.</p>}</section></div>;
   }
   function CommunitiesPage() {
-    const groups=[["Creative Corner","Share your work, get feedback, and meet fellow creatives.","12.8k members","CC","lavender"],["Everyday Wins","A little space to celebrate big and small moments.","8.4k members","EW","mint"],["Design & Digital","Ideas, inspiration and thoughtful design conversations.","6.2k members","DD","peach"],["Book Club","For readers, reviewers and people who love a good story.","4.1k members","BC","lavender"]];
-    return <div className="screen-stack"><section className="feature-panel"><div><span className="welcome-pill"><Users size={13}/> FIND YOUR PEOPLE</span><h2>Belong to something good.</h2><p>Join spaces where you can share, learn, and feel at home.</p></div><Users size={54}/></section><div className="section-title"><h2>Communities to explore</h2><button className="outline-button compact" onClick={()=>notify("Community creation will be available after account and server setup.")}><Plus size={15}/> Create community</button></div><div className="community-grid">{groups.map(([name,desc,count,initials,tone])=><article className="community-card" key={name}><div className={"community-art "+tone}><Avatar initials={initials} tone={tone} size="large"/></div><div className="community-card-body"><h3>{name}</h3><p>{desc}</p><span><Users size={14}/> {count}</span><button className={communityJoined.includes(name)?"outline-button":"primary-button"} onClick={()=>setCommunityJoined(old=>old.includes(name)?old.filter(x=>x!==name):[...old,name])}>{communityJoined.includes(name)?<><Check size={15}/> Joined</>:<>Join community <ArrowRight size={15}/></>}</button></div></article>)}</div></div>;
+    const tones = ["lavender", "mint", "peach"];
+    return <div className="screen-stack"><section className="feature-panel"><div><span className="welcome-pill"><Users size={13}/> FIND YOUR PEOPLE</span><h2>Belong to something good.</h2><p>Discover real communities created by Gist Up members, or start one around something you care about.</p></div><Users size={54}/></section><div className="section-title"><h2>Communities to explore</h2><button className="outline-button compact" onClick={()=>setCommunityFormOpen(value=>!value)}><Plus size={15}/>{communityFormOpen?"Cancel":"Create community"}</button></div>{communityFormOpen&&<section className="content-panel"><h3>Create a community</h3><label className="auth-label">Community name<input value={communityName} onChange={e=>setCommunityName(e.target.value)} maxLength={70} placeholder="e.g. Lagos Creatives"/></label><label className="auth-label">Description<textarea value={communityDescription} onChange={e=>setCommunityDescription(e.target.value)} maxLength={300} placeholder="What will members share or discuss?"/></label><button className="primary-button" disabled={communityBusy||communityName.trim().length<3||communityDescription.trim().length<10} onClick={createCommunity}>{communityBusy?"Creating…":"Create community"} <ArrowRight size={16}/></button></section>}<div className="community-grid">{communities.map((community,index)=>{const joined=communityJoined.includes(String(community.id));const tone=tones[index%tones.length];const initials=String(community.name||"C").split(/\s+/).map(part=>part[0]).join("").slice(0,2).toUpperCase();return <article className="community-card" key={community.id}><div className={"community-art "+tone}><Avatar initials={initials} tone={tone} size="large"/></div><div className="community-card-body"><h3>{community.name}</h3><p>{community.description}</p><span><Users size={14}/> {Number(community.member_count||0).toLocaleString()} {Number(community.member_count)===1?"member":"members"}</span><button className={joined?"outline-button":"primary-button"} onClick={()=>toggleCommunityMembership(community)}>{joined?<><Check size={15}/> Joined</>:<>Join community <ArrowRight size={15}/></>}</button></div></article>})}{!communities.length&&<div className="empty-panel"><div className="placeholder-icon"><Users size={27}/></div><h2>No communities yet</h2><p>Be the first to create a community and invite people to join.</p><button className="primary-button" onClick={()=>setCommunityFormOpen(true)}>Create a community <Plus size={16}/></button></div>}</div></div>;
   }
   function MessagesPage() {
     const current = conversations.find(c => String(c.id) === String(activeConversationId));
