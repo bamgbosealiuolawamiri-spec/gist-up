@@ -27,6 +27,7 @@ function App() {
   const [liked, setLiked] = useState([]);
   const [saved, setSaved] = useState([]);
   const [savedPosts, setSavedPosts] = useState([]);
+  const [notifications, setNotifications] = useState([]);
   const [following, setFollowing] = useState([]);
   const [people, setPeople] = useState([]);
   const [feedMode, setFeedMode] = useState("for-you");
@@ -75,13 +76,14 @@ function App() {
 
   async function loadAppData(fallbackUser = null) {
     try {
-      const [profileResponse, postsResponse, usersResponse, followingResponse, blocksResponse, savedResponse] = await Promise.all([
+      const [profileResponse, postsResponse, usersResponse, followingResponse, blocksResponse, savedResponse, notificationsResponse] = await Promise.all([
         fetch(API_BASE + "/api/profile/me", { credentials: "include" }),
         fetch(API_BASE + "/api/posts?feed=" + encodeURIComponent(feedMode), { credentials: "include" }),
         fetch(API_BASE + "/api/users", { credentials: "include" }),
         fetch(API_BASE + "/api/follows/me", { credentials: "include" }),
         fetch(API_BASE + "/api/blocks/me", { credentials: "include" }),
-        fetch(API_BASE + "/api/saved", { credentials: "include" })
+        fetch(API_BASE + "/api/saved", { credentials: "include" }),
+        fetch(API_BASE + "/api/notifications", { credentials: "include" })
       ]);
       let user = fallbackUser;
       if (profileResponse.ok) {
@@ -136,6 +138,10 @@ function App() {
         const items = Array.isArray(savedData.posts) ? savedData.posts : [];
         setSavedPosts(items);
         setSaved(items.map(post => post.id));
+      }
+      if (notificationsResponse.ok) {
+        const notificationsData = await notificationsResponse.json().catch(() => ({}));
+        setNotifications(Array.isArray(notificationsData.notifications) ? notificationsData.notifications : []);
       }
     } catch {
       notify("Couldn't refresh your profile and feed. Please try again.");
@@ -563,8 +569,18 @@ function App() {
     </div>;
   }
   function NotificationsPage() {
-    const items=[["NC","Nia Carter","started following you.","2 min ago","lavender"],["TA","Tobi Adeyemi","mentioned you in a conversation.","1 hr ago","mint"],["LM","Leah Morgan","liked your post.","3 hr ago","peach"],["G","Gist Up","Welcome! Start by finding people and topics you enjoy.","Yesterday","lavender"]];
-    return <div className="content-panel notifications-panel"><div className="notification-tabs">{["All","Mentions","Follows"].map(t=><button className={notificationFilter===t?"tab-active":""} onClick={()=>setNotificationFilter(t)} key={t}>{t}</button>)}<button className="text-button mark-read" onClick={()=>notify("All notifications marked as read in this preview.")}>Mark all as read</button></div>{items.filter((it,i)=>notificationFilter==="All"||(notificationFilter==="Mentions"&&i===1)||(notificationFilter==="Follows"&&i===0)).map(([initials,name,action,time,tone],i)=><div className="notification-row" key={name}><Avatar initials={initials} tone={tone}/><div><p><strong>{name}</strong> {action}</p><span>{time}</span></div>{i===0&&<i/>}</div>)}</div>;
+    const actionText = { follow: "started following you.", like: "liked your post.", comment: "commented on your post.", message: "sent you a message." };
+    const filtered = notifications.filter(item => notificationFilter === "All" || (notificationFilter === "Follows" && item.type === "follow") || (notificationFilter === "Mentions" && item.type === "comment"));
+    async function markAllRead() {
+      try {
+        const response = await fetch(API_BASE + "/api/notifications/read-all", { method: "PATCH", credentials: "include" });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || "Couldn't mark notifications as read.");
+        setNotifications(old => old.map(item => ({ ...item, is_read: true })));
+        notify("All notifications marked as read.");
+      } catch (error) { notify(error?.message || "Couldn't update notifications."); }
+    }
+    return <div className="content-panel notifications-panel"><div className="notification-tabs">{["All","Mentions","Follows"].map(t=><button className={notificationFilter===t?"tab-active":""} onClick={()=>setNotificationFilter(t)} key={t}>{t}</button>)}<button className="text-button mark-read" onClick={markAllRead}>Mark all as read</button></div>{filtered.map((item,index)=>{const name=item.actor_name||"Gist Up member";const initials=String(name).split(/\s+/).map(part=>part[0]).join("").slice(0,2).toUpperCase();const time=new Date(item.created_at).toLocaleString();return <div className={"notification-row "+(item.is_read?"notification-read":"")} key={item.id}><Avatar initials={initials} tone={["lavender","mint","peach"][index%3]}/><div><p><strong>{name}</strong> {actionText[item.type]||"interacted with you."}</p><span>{time}</span></div>{!item.is_read&&<i/>}</div>})}{!filtered.length&&<div className="empty-state-box"><Bell size={24}/><strong>No notifications yet</strong><p>New follows, likes, comments, and messages will appear here.</p></div>}</div>;
   }
   function SavedPage() { return <div className="screen-stack">{savedPosts.length?savedPosts.map(post=><PostCard post={post} key={post.id}/>):<div className="empty-panel"><div className="placeholder-icon"><Bookmark size={27}/></div><h2>Your saved posts live here</h2><p>Tap the bookmark on a post to keep it close for later.</p><button className="primary-button" onClick={()=>go("Home")}>Explore your feed <ArrowRight size={16}/></button></div>}</div>; }
   function ProfilePage() {
