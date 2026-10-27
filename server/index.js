@@ -395,6 +395,10 @@ app.post("/api/posts", authenticate, async (req, res) => {
 });
 
 
+app.get("/api/ai/status", authenticate, async (req, res) => {
+  return res.json({ configured: Boolean(process.env.OPENAI_API_KEY), model: process.env.OPENAI_MODEL || "gpt-4o-mini" });
+});
+
 app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
   const prompt = String(req.body?.prompt || "").trim();
   if (!prompt) return res.status(400).json({ error: "Write a message for Gisty AI first." });
