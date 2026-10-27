@@ -26,6 +26,7 @@ function App() {
   const [active, setActive] = useState("Home");
   const [liked, setLiked] = useState([]);
   const [likedPosts, setLikedPosts] = useState([]);
+  const [myReplies, setMyReplies] = useState([]);
   const [reposted, setReposted] = useState([]);
   const [saved, setSaved] = useState([]);
   const [savedPosts, setSavedPosts] = useState([]);
@@ -103,7 +104,7 @@ function App() {
 
   async function loadAppData(fallbackUser = null) {
     try {
-      const [profileResponse, postsResponse, usersResponse, followingResponse, blocksResponse, savedResponse, notificationsResponse, campaignsResponse, likesResponse, communitiesResponse, settingsResponse] = await Promise.all([
+      const [profileResponse, postsResponse, usersResponse, followingResponse, blocksResponse, savedResponse, notificationsResponse, campaignsResponse, likesResponse, communitiesResponse, settingsResponse, repliesResponse] = await Promise.all([
         fetch(API_BASE + "/api/profile/me", { credentials: "include" }),
         fetch(API_BASE + "/api/posts?feed=" + encodeURIComponent(feedMode), { credentials: "include" }),
         fetch(API_BASE + "/api/users", { credentials: "include" }),
@@ -114,7 +115,8 @@ function App() {
         fetch(API_BASE + "/api/ads/campaigns", { credentials: "include" }),
         fetch(API_BASE + "/api/likes/me", { credentials: "include" }),
         fetch(API_BASE + "/api/communities", { credentials: "include" }),
-        fetch(API_BASE + "/api/settings", { credentials: "include" })
+        fetch(API_BASE + "/api/settings", { credentials: "include" }),
+        fetch(API_BASE + "/api/comments/me", { credentials: "include" })
       ]);
       let user = fallbackUser;
       if (profileResponse.ok) {
@@ -176,6 +178,10 @@ function App() {
         const items = Array.isArray(likesData.posts) ? likesData.posts : [];
         setLikedPosts(items);
         setLiked(items.map(post => post.id));
+      }
+      if (repliesResponse.ok) {
+        const repliesData = await repliesResponse.json().catch(() => ({}));
+        setMyReplies(Array.isArray(repliesData.replies) ? repliesData.replies : []);
       }
       if (notificationsResponse.ok) {
         const notificationsData = await notificationsResponse.json().catch(() => ({}));
@@ -863,9 +869,10 @@ function App() {
   function ProfilePage() {
     const myPosts = posts.filter(p => p.handle === handle);
     const visibleProfilePosts = profileTab === "Likes" ? likedPosts : myPosts;
-    const emptyTitle = profileTab === "Posts" ? "Your story starts with a post" : profileTab === "Likes" ? "No liked posts yet" : profileTab + " will appear here";
-    const emptyCopy = profileTab === "Posts" ? "Share something with your community to get started." : profileTab === "Likes" ? "Posts you like will appear here so you can find them again." : "This profile section will become available as more content features are added.";
-    return <div className="screen-stack"><section className="profile-page-card"><div className="profile-page-cover"><button className="cover-edit" onClick={()=>notify("Cover photo uploads are planned for a later update.")}><Camera size={15}/> Edit cover</button></div><div className="profile-page-body"><Avatar initials={myInitials} size="profile-avatar"/><button className="outline-button edit-profile-button" onClick={()=>setEditProfile(true)}><Pencil size={14}/> Edit profile</button><h2>{displayName}</h2><span className="profile-handle">{handle}</span><p>{profileBio}</p><div className="profile-page-stats"><span><b>{myPosts.length}</b> posts</span><span><b>{following.length}</b> following</span><span><b>{followerCount}</b> followers</span></div><div className="profile-tabs">{["Posts","Replies","Media","Likes"].map(t=><button className={profileTab===t?"tab-active":""} onClick={()=>setProfileTab(t)} key={t}>{t}</button>)}</div></div></section>{(profileTab==="Posts"||profileTab==="Likes")&&visibleProfilePosts.length ? visibleProfilePosts.map(post=><PostCard post={post} key={post.id}/>) : <div className="empty-panel compact-empty"><h3>{emptyTitle}</h3><p>{emptyCopy}</p>{profileTab==="Posts"&&<button className="primary-button" onClick={()=>setComposerOpen(true)}><Plus size={16}/> Create post</button>}</div>}</div>;
+    const mediaPosts = myPosts.filter(post => post.image_url || post.media_url || post.imageUrl);
+    const emptyTitle = profileTab === "Posts" ? "Your story starts with a post" : profileTab === "Likes" ? "No liked posts yet" : profileTab === "Replies" ? "Your replies will appear here" : "No media posts yet";
+    const emptyCopy = profileTab === "Posts" ? "Share something with your community to get started." : profileTab === "Likes" ? "Posts you like will appear here so you can find them again." : profileTab === "Replies" ? "When you comment on conversations, your replies will be collected here." : "Posts with attached media will appear in this section.";
+    return <div className="screen-stack"><section className="profile-page-card"><div className="profile-page-cover"><button className="cover-edit" onClick={() => notify("Cover photo uploads are not available yet.")}><Camera size={15}/> Edit cover</button></div><div className="profile-page-body"><Avatar initials={myInitials} size="profile-avatar"/><button className="outline-button edit-profile-button" onClick={() => setEditProfile(true)}><Pencil size={14}/> Edit profile</button><h2>{displayName}</h2><span className="profile-handle">{handle}</span><p>{profileBio}</p><div className="profile-page-stats"><span><b>{myPosts.length}</b> posts</span><span><b>{following.length}</b> following</span><span><b>{followerCount}</b> followers</span></div><div className="profile-tabs">{["Posts","Replies","Media","Likes"].map(t=><button className={profileTab===t?"tab-active":""} onClick={()=>setProfileTab(t)} key={t}>{t}</button>)}</div></div></section>{profileTab==="Replies" ? (myReplies.length ? myReplies.map(reply=><article className="content-panel profile-reply-card" key={reply.id}><div className="post-author"><strong>Your reply</strong><span>{new Date(reply.created_at).toLocaleString()}</span></div><p className="post-copy">{reply.content}</p><div className="reply-context"><span>Replying to <strong>{reply.post_author_name}</strong> (@{reply.post_author_username})</span><p>{reply.post_content}</p><button className="text-button" onClick={()=>openComments(reply.post_id)}>View conversation <ArrowRight size={14}/></button></div></article>) : <div className="empty-panel compact-empty"><h3>{emptyTitle}</h3><p>{emptyCopy}</p><button className="primary-button" onClick={()=>go("Home")}>Join a conversation <ArrowRight size={16}/></button></div>) : profileTab==="Media" ? (mediaPosts.length ? mediaPosts.map(post=><PostCard post={post} key={post.id}/>) : <div className="empty-panel compact-empty"><h3>{emptyTitle}</h3><p>{emptyCopy}</p><button className="primary-button" onClick={()=>setComposerOpen(true)}><Plus size={16}/> Create post</button></div>) : visibleProfilePosts.length ? visibleProfilePosts.map(post=><PostCard post={post} key={post.id}/>) : <div className="empty-panel compact-empty"><h3>{emptyTitle}</h3><p>{emptyCopy}</p>{profileTab==="Posts"&&<button className="primary-button" onClick={()=>setComposerOpen(true)}><Plus size={16}/> Create post</button>}</div>}</div>;
   }
   function CreatorStudioPage() {
     return <div className="screen-stack"><section className="feature-panel"><div><span className="welcome-pill"><Sparkles size={13}/> CREATOR SPACE</span><h2>Make something meaningful.</h2><p>Draft your next post, review your recent activity, and keep your ideas moving.</p><button className="primary-button" onClick={()=>setComposerOpen(true)}><Plus size={16}/> Create a post</button></div><WandSparkles size={58}/></section><div className="stats-grid"><div className="stat-card"><span>Posts in preview</span><b>{posts.filter(p=>p.handle===handle).length}</b><small><FileText size={14}/> Published drafts</small></div><div className="stat-card"><span>Total likes</span><b>{posts.filter(p=>p.handle===handle).reduce((n,p)=>n+p.likes,0)}</b><small><Heart size={14}/> Engagement preview</small></div><div className="stat-card"><span>Following</span><b>{following.length}</b><small><Users size={14}/> Your connections</small></div></div><section className="content-panel"><div className="section-title"><h2>Your recent posts</h2><button className="text-button" onClick={()=>go("Profile")}>View profile</button></div>{posts.filter(p=>p.handle===handle).length?posts.filter(p=>p.handle===handle).map(p=><PostCard post={p} key={p.id}/>):<p className="empty-state">You haven't published a post in this preview yet.</p>}</section><section className="content-panel"><div className="section-title"><h2>Creator tools</h2></div><div className="tool-grid"><button onClick={()=>setComposerOpen(true)}><Pencil size={19}/><strong>Post composer</strong><span>Write and share an update</span></button><button onClick={()=>go("Explore")}><TrendingUp size={19}/><strong>Discover trends</strong><span>Find relevant conversations</span></button><button onClick={()=>go("AI Assistant")}><Bot size={19}/><strong>Idea assistant</strong><span>Get help with your next idea</span></button></div></section></div>;
