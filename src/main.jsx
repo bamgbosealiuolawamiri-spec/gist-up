@@ -69,6 +69,7 @@ function App() {
   const [notificationFilter, setNotificationFilter] = useState("All");
   const [assistantPrompt, setAssistantPrompt] = useState("");
   const [assistantReply, setAssistantReply] = useState("");
+  const [assistantBusy, setAssistantBusy] = useState(false);
   const [communityJoined, setCommunityJoined] = useState([]);
   const [blocked, setBlocked] = useState([]);
   const [profileBio, setProfileBio] = useState("Your story starts here. Add a bio and let people get to know you.");
@@ -351,6 +352,24 @@ function App() {
       notify(error?.message || "Couldn't update following.");
     }
   }
+  async function askGistyAI() {
+    const prompt = assistantPrompt.trim();
+    if (!prompt || assistantBusy) return;
+    setAssistantBusy(true);
+    try {
+      const response = await fetch(API_BASE + "/api/ai/chat", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Gisty AI couldn't respond right now.");
+      setAssistantReply(result.reply || "");
+    } catch (error) {
+      notify(error?.message || "Gisty AI couldn't respond right now.");
+    } finally {
+      setAssistantBusy(false);
+    }
+  }
   async function createCampaign() {
     const name = campaignName.trim();
     if (name.length < 3) { notify("Give your campaign a name of at least 3 characters."); return; }
@@ -626,7 +645,7 @@ function App() {
   function CreatorStudioPage() {
     return <div className="screen-stack"><section className="feature-panel"><div><span className="welcome-pill"><Sparkles size={13}/> CREATOR SPACE</span><h2>Make something meaningful.</h2><p>Draft your next post, review your recent activity, and keep your ideas moving.</p><button className="primary-button" onClick={()=>setComposerOpen(true)}><Plus size={16}/> Create a post</button></div><WandSparkles size={58}/></section><div className="stats-grid"><div className="stat-card"><span>Posts in preview</span><b>{posts.filter(p=>p.handle===handle).length}</b><small><FileText size={14}/> Published drafts</small></div><div className="stat-card"><span>Total likes</span><b>{posts.filter(p=>p.handle===handle).reduce((n,p)=>n+p.likes,0)}</b><small><Heart size={14}/> Engagement preview</small></div><div className="stat-card"><span>Following</span><b>{following.length}</b><small><Users size={14}/> Your connections</small></div></div><section className="content-panel"><div className="section-title"><h2>Your recent posts</h2><button className="text-button" onClick={()=>go("Profile")}>View profile</button></div>{posts.filter(p=>p.handle===handle).length?posts.filter(p=>p.handle===handle).map(p=><PostCard post={p} key={p.id}/>):<p className="empty-state">You haven't published a post in this preview yet.</p>}</section><section className="content-panel"><div className="section-title"><h2>Creator tools</h2></div><div className="tool-grid"><button onClick={()=>setComposerOpen(true)}><Pencil size={19}/><strong>Post composer</strong><span>Write and share an update</span></button><button onClick={()=>go("Explore")}><TrendingUp size={19}/><strong>Discover trends</strong><span>Find relevant conversations</span></button><button onClick={()=>go("AI Assistant")}><Bot size={19}/><strong>Idea assistant</strong><span>Get help with your next idea</span></button></div></section></div>;
   }
-  function AssistantPage() { return <div className="assistant-page"><section className="assistant-hero"><div className="assistant-orb"><Sparkles size={28}/></div><span className="welcome-pill">GIST UP AI</span><h2>What are we creating today?</h2><p>Brainstorm post ideas, refine a caption, or find a fresh way to tell your story.</p><div className="prompt-chips">{["Give me post ideas","Improve my caption","Suggest a community topic"].map(x=><button key={x} onClick={()=>setAssistantPrompt(x)}>{x}</button>)}</div></section>{assistantReply&&<div className="assistant-reply"><Avatar initials="AI" tone="lavender"/><div><strong>Gist Up Assistant · Preview</strong><p>{assistantReply}</p><small>This is a local sample response, not a connected AI service.</small></div></div>}<div className="assistant-input"><textarea value={assistantPrompt} onChange={e=>setAssistantPrompt(e.target.value)} placeholder="Tell me what you want help with…"/><button className="primary-button" onClick={()=>{if(assistantPrompt.trim()){setAssistantReply("Here’s a simple way to start: choose one clear idea, write it in your natural voice, and end with a question that invites others to share their perspective. Your prompt: “"+assistantPrompt.trim()+"”. Try making it personal, specific, and welcoming.");}}} disabled={!assistantPrompt.trim()}><Send size={16}/> Ask assistant</button></div></div>; }
+  function AssistantPage() { return <div className="assistant-page"><section className="assistant-hero"><div className="assistant-orb"><Sparkles size={28}/></div><span className="welcome-pill">GISTY AI · YOUR CREATIVE SIDEKICK</span><h2>What are we creating today?</h2><p>Brainstorm post ideas, refine a caption, plan community conversations, and find a fresh way to tell your story.</p><div className="prompt-chips">{["Give me post ideas","Improve my caption","Suggest a community topic"].map(x=><button key={x} onClick={()=>setAssistantPrompt(x)}>{x}</button>)}</div></section>{assistantReply&&<div className="assistant-reply"><Avatar initials="GA" tone="lavender"/><div><strong>Gisty AI</strong><p>{assistantReply}</p></div></div>}<div className="assistant-input"><textarea value={assistantPrompt} onChange={e=>setAssistantPrompt(e.target.value)} maxLength={2000} placeholder="Tell Gisty AI what you want help with…"/><button className="primary-button" onClick={askGistyAI} disabled={!assistantPrompt.trim()||assistantBusy}>{assistantBusy?"Thinking…":<><Send size={16}/> Ask Gisty AI</>}</button><small>Gisty AI may make mistakes. Review suggestions before posting.</small></div></div>; }
   function AdsManagerPage() {
     return <div className="screen-stack">
       <section className="feature-panel"><div><span className="welcome-pill"><Megaphone size={13}/> PROMOTION WORKSPACE</span><h2>Help the right people find you.</h2><p>Build campaign drafts, set a goal, and plan a daily budget before ads are reviewed for delivery.</p><button className="primary-button" onClick={()=>setCampaignModalOpen(true)}><Plus size={16}/> Create campaign</button></div><BarChart3 size={56}/></section>
