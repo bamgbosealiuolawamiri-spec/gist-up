@@ -228,7 +228,7 @@ app.patch("/api/profile/me", authenticate, async (req, res) => {
   }
 });
 
-app.get("/api/posts", authenticate, async (_req, res) => {
+app.get("/api/posts", authenticate, async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT p.id, p.content, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url,
@@ -237,9 +237,12 @@ app.get("/api/posts", authenticate, async (_req, res) => {
              EXISTS(SELECT 1 FROM post_likes mine WHERE mine.post_id = p.id AND mine.user_id = $1) AS is_liked
       FROM posts p
       JOIN users u ON u.id = p.user_id
+      WHERE ($2::text <> 'following' OR EXISTS (
+        SELECT 1 FROM user_follows uf WHERE uf.follower_id = $1 AND uf.followed_id = u.id
+      ) OR p.user_id = $1)
       ORDER BY p.created_at DESC, p.id DESC
       LIMIT 100
-    `, [req.user.id]);
+    `, [req.user.id, String(req.query.feed || 'for-you')]);
     res.json({ posts: result.rows.map(row => ({
       id: row.id,
       text: row.content,
@@ -349,20 +352,67 @@ app.post("/api/posts/:id/comments", authenticate, async (req, res) => {
 
 app.get("/api/users", authenticate, async (req, res) => {
   const search = String(req.query.search || "").trim().slice(0, 80);
-  if (search.length < 2) return res.json({ users: [] });
+  if (search && search.length < 2) return res.json({ users: [] });
   try {
     const result = await pool.query(
-      `SELECT id, full_name, username, bio, avatar_url
-       FROM users
-       WHERE id <> $1 AND (full_name ILIKE $2 OR username ILIKE $2)
-       ORDER BY full_name ASC
-       LIMIT 20`,
-      [req.user.id, "%" + search + "%"]
+      `SELECT u.id, u.full_name, u.username, u.bio, u.avatar_url,
+              EXISTS(SELECT 1 FROM user_follows mine WHERE mine.follower_id = $1 AND mine.followed_id = u.id) AS is_following,
+              (SELECT COUNT(*)::int FROM user_follows followers WHERE followers.followed_id = u.id) AS followers_count,
+              (SELECT COUNT(*)::int FROM user_follows following WHERE following.follower_id = u.id) AS following_count
+       FROM users u
+       WHERE u.id <> $1
+         AND ($2::text = '' OR u.full_name ILIKE $3 OR u.username ILIKE $3)
+       ORDER BY followers_count DESC, u.created_at DESC
+       LIMIT 30`,
+      [req.user.id, search, "%" + search + "%"]
     );
     res.json({ users: result.rows });
   } catch (error) {
     console.error("User search failed:", error?.message || "unknown error");
     res.status(500).json({ error: "We couldn't search accounts right now." });
+  }
+});
+
+app.post("/api/users/:id/follow", authenticate, async (req, res) => {
+  const targetId = String(req.params.id || "");
+  if (!/^\\d+$/.test(targetId) || targetId === String(req.user.id)) {
+    return res.status(400).json({ error: "Choose a valid account to follow." });
+  }
+  try {
+    const target = await pool.query("SELECT id FROM users WHERE id = $1 LIMIT 1", [targetId]);
+    if (!target.rowCount) return res.status(404).json({ error: "Account not found." });
+    const existing = await pool.query("SELECT 1 FROM user_follows WHERE follower_id = $1 AND followed_id = $2", [req.user.id, targetId]);
+    let following;
+    if (existing.rowCount) {
+      await pool.query("DELETE FROM user_follows WHERE follower_id = $1 AND followed_id = $2", [req.user.id, targetId]);
+      following = false;
+    } else {
+      await pool.query("INSERT INTO user_follows (follower_id, followed_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [req.user.id, targetId]);
+      following = true;
+    }
+    const counts = await pool.query(
+      "SELECT (SELECT COUNT(*)::int FROM user_follows WHERE follower_id = $1) AS following_count, (SELECT COUNT(*)::int FROM user_follows WHERE followed_id = $1) AS followers_count",
+      [targetId]
+    );
+    return res.json({ following, userId: Number(targetId), followersCount: counts.rows[0].followers_count, myFollowingCount: (await pool.query("SELECT COUNT(*)::int AS count FROM user_follows WHERE follower_id = $1", [req.user.id])).rows[0].count });
+  } catch (error) {
+    console.error("Follow update failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't update that connection right now." });
+  }
+});
+
+app.get("/api/follows/me", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT u.id, u.full_name, u.username, u.bio, u.avatar_url
+       FROM user_follows f JOIN users u ON u.id = f.followed_id
+       WHERE f.follower_id = $1 ORDER BY f.created_at DESC`,
+      [req.user.id]
+    );
+    res.json({ users: result.rows });
+  } catch (error) {
+    console.error("Following list fetch failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "We couldn't load your connections right now." });
   }
 });
 
@@ -539,6 +589,16 @@ async function start() {
         )
       `);
       await pool.query("CREATE INDEX IF NOT EXISTS posts_created_at_idx ON posts (created_at DESC, id DESC)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS user_follows (
+          follower_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          followed_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (follower_id, followed_id),
+          CHECK (follower_id <> followed_id)
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS user_follows_followed_idx ON user_follows (followed_id, created_at DESC)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS post_likes (
           user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
