@@ -371,7 +371,7 @@ app.get("/api/users", authenticate, async (req, res) => {
        FROM users u
        WHERE u.id <> $1
          AND ($2::text = '' OR u.full_name ILIKE $3 OR u.username ILIKE $3)
-       ORDER BY followers_count DESC, u.created_at DESC
+       ORDER BY EXISTS(SELECT 1 FROM user_follows prioritized WHERE prioritized.follower_id = $1 AND prioritized.followed_id = u.id) DESC, followers_count DESC, u.created_at DESC
        LIMIT 30`,
       [req.user.id, search, "%" + search + "%"]
     );
