@@ -572,6 +572,27 @@ app.get("/api/likes/me", authenticate, async (req, res) => {
   }
 });
 
+app.get("/api/comments/me", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT c.id, c.content, c.created_at, p.id AS post_id, p.content AS post_content,
+              u.full_name AS post_author_name, u.username AS post_author_username
+       FROM post_comments c
+       JOIN posts p ON p.id = c.post_id
+       JOIN users u ON u.id = p.user_id
+       WHERE c.user_id = $1
+         AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_id = $1 AND b.blocked_id = u.id) OR (b.blocker_id = u.id AND b.blocked_id = $1))
+       ORDER BY c.created_at DESC
+       LIMIT 200`,
+      [req.user.id]
+    );
+    return res.json({ replies: result.rows });
+  } catch (error) {
+    console.error("My replies fetch failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't load your replies right now." });
+  }
+});
+
 app.get("/api/saved", authenticate, async (req, res) => {
   try {
     const result = await pool.query(
