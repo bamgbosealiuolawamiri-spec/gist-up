@@ -371,6 +371,7 @@ app.get("/api/users", authenticate, async (req, res) => {
        FROM users u
        WHERE u.id <> $1
          AND ($2::text = '' OR u.full_name ILIKE $3 OR u.username ILIKE $3)
+         AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_id = $1 AND b.blocked_id = u.id) OR (b.blocker_id = u.id AND b.blocked_id = $1))
        ORDER BY EXISTS(SELECT 1 FROM user_follows prioritized WHERE prioritized.follower_id = $1 AND prioritized.followed_id = u.id) DESC, followers_count DESC, u.created_at DESC
        LIMIT 30`,
       [req.user.id, search, "%" + search + "%"]
@@ -379,6 +380,43 @@ app.get("/api/users", authenticate, async (req, res) => {
   } catch (error) {
     console.error("User search failed:", error?.message || "unknown error");
     res.status(500).json({ error: "We couldn't search accounts right now." });
+  }
+});
+
+app.get("/api/blocks/me", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT u.id, u.full_name, u.username, u.bio, u.avatar_url
+       FROM user_blocks b JOIN users u ON u.id = b.blocked_id
+       WHERE b.blocker_id = $1 ORDER BY b.created_at DESC`,
+      [req.user.id]
+    );
+    return res.json({ users: result.rows });
+  } catch (error) {
+    console.error("Blocked list fetch failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't load blocked accounts right now." });
+  }
+});
+
+app.post("/api/users/:id/block", authenticate, async (req, res) => {
+  const targetId = String(req.params.id || "");
+  const blocked = req.body?.blocked === true;
+  if (!/^\\d+$/.test(targetId) || targetId === String(req.user.id)) {
+    return res.status(400).json({ error: "Choose a valid account to block." });
+  }
+  try {
+    const target = await pool.query("SELECT id FROM users WHERE id = $1 LIMIT 1", [targetId]);
+    if (!target.rowCount) return res.status(404).json({ error: "Account not found." });
+    if (blocked) {
+      await pool.query("INSERT INTO user_blocks (blocker_id, blocked_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [req.user.id, targetId]);
+      await pool.query("DELETE FROM user_follows WHERE (follower_id = $1 AND followed_id = $2) OR (follower_id = $2 AND followed_id = $1)", [req.user.id, targetId]);
+    } else {
+      await pool.query("DELETE FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2", [req.user.id, targetId]);
+    }
+    return res.json({ ok: true, blocked, userId: Number(targetId) });
+  } catch (error) {
+    console.error("Block update failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't update blocked accounts right now." });
   }
 });
 
@@ -467,6 +505,8 @@ app.post("/api/conversations", authenticate, async (req, res) => {
   try {
     const found = await pool.query("SELECT id FROM users WHERE id = $1 LIMIT 1", [otherId]);
     if (!found.rowCount) return res.status(404).json({ error: "That account could not be found." });
+    const blockCheck = await pool.query("SELECT 1 FROM user_blocks WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1) LIMIT 1", [req.user.id, otherId]);
+    if (blockCheck.rowCount) return res.status(403).json({ error: "You can't start a conversation with this account." });
     const a = BigInt(req.user.id) < BigInt(otherId) ? req.user.id : otherId;
     const b = BigInt(req.user.id) < BigInt(otherId) ? otherId : req.user.id;
     await pool.query(
@@ -491,6 +531,8 @@ app.get("/api/conversations/:id/messages", authenticate, async (req, res) => {
       [req.params.id, req.user.id]
     );
     if (!access.rowCount) return res.status(404).json({ error: "Conversation not found." });
+    const blockCheck = await pool.query("SELECT 1 FROM conversations c WHERE c.id = $1 AND EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_id = $2 AND b.blocked_id = CASE WHEN c.user_a_id = $2 THEN c.user_b_id ELSE c.user_a_id END) OR (b.blocker_id = CASE WHEN c.user_a_id = $2 THEN c.user_b_id ELSE c.user_a_id END AND b.blocked_id = $2))", [req.params.id, req.user.id]);
+    if (blockCheck.rowCount) return res.status(403).json({ error: "Messaging is unavailable for this conversation." });
     const result = await pool.query(
       `SELECT m.id, m.content, m.created_at, m.sender_id,
               u.full_name AS sender_name, u.username AS sender_username
@@ -517,6 +559,8 @@ app.post("/api/conversations/:id/messages", authenticate, async (req, res) => {
       [req.params.id, req.user.id]
     );
     if (!access.rowCount) return res.status(404).json({ error: "Conversation not found." });
+    const blockCheck = await pool.query("SELECT 1 FROM conversations c WHERE c.id = $1 AND EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_id = $2 AND b.blocked_id = CASE WHEN c.user_a_id = $2 THEN c.user_b_id ELSE c.user_a_id END) OR (b.blocker_id = CASE WHEN c.user_a_id = $2 THEN c.user_b_id ELSE c.user_a_id END AND b.blocked_id = $2))", [req.params.id, req.user.id]);
+    if (blockCheck.rowCount) return res.status(403).json({ error: "Messaging is unavailable for this conversation." });
     const result = await pool.query(
       `INSERT INTO direct_messages (conversation_id, sender_id, content)
        VALUES ($1, $2, $3)
@@ -608,6 +652,16 @@ async function start() {
         )
       `);
       await pool.query("CREATE INDEX IF NOT EXISTS user_follows_followed_idx ON user_follows (followed_id, created_at DESC)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS user_blocks (
+          blocker_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          blocked_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (blocker_id, blocked_id),
+          CHECK (blocker_id <> blocked_id)
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS user_blocks_blocked_idx ON user_blocks (blocked_id, blocker_id)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS post_likes (
           user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
