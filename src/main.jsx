@@ -26,6 +26,7 @@ function App() {
   const [active, setActive] = useState("Home");
   const [liked, setLiked] = useState([]);
   const [saved, setSaved] = useState([]);
+  const [savedPosts, setSavedPosts] = useState([]);
   const [following, setFollowing] = useState([]);
   const [people, setPeople] = useState([]);
   const [feedMode, setFeedMode] = useState("for-you");
@@ -74,12 +75,13 @@ function App() {
 
   async function loadAppData(fallbackUser = null) {
     try {
-      const [profileResponse, postsResponse, usersResponse, followingResponse, blocksResponse] = await Promise.all([
+      const [profileResponse, postsResponse, usersResponse, followingResponse, blocksResponse, savedResponse] = await Promise.all([
         fetch(API_BASE + "/api/profile/me", { credentials: "include" }),
         fetch(API_BASE + "/api/posts?feed=" + encodeURIComponent(feedMode), { credentials: "include" }),
         fetch(API_BASE + "/api/users", { credentials: "include" }),
         fetch(API_BASE + "/api/follows/me", { credentials: "include" }),
-        fetch(API_BASE + "/api/blocks/me", { credentials: "include" })
+        fetch(API_BASE + "/api/blocks/me", { credentials: "include" }),
+        fetch(API_BASE + "/api/saved", { credentials: "include" })
       ]);
       let user = fallbackUser;
       if (profileResponse.ok) {
@@ -128,6 +130,12 @@ function App() {
         setLiked(Array.isArray(data.posts) ? data.posts.filter(post => post.isLiked).map(post => post.id) : []);
       } else if (postsResponse.status !== 401) {
         notify("We couldn't load posts right now.");
+      }
+      if (savedResponse.ok) {
+        const savedData = await savedResponse.json().catch(() => ({}));
+        const items = Array.isArray(savedData.posts) ? savedData.posts : [];
+        setSavedPosts(items);
+        setSaved(items.map(post => post.id));
       }
     } catch {
       notify("Couldn't refresh your profile and feed. Please try again.");
@@ -325,6 +333,24 @@ function App() {
       notify(error?.message || "Couldn't update following.");
     }
   }
+  async function toggleSave(post) {
+    const wasSaved = saved.includes(post.id);
+    setSaved(old => wasSaved ? old.filter(id => id !== post.id) : [...old, post.id]);
+    setSavedPosts(old => wasSaved ? old.filter(item => item.id !== post.id) : [post, ...old.filter(item => item.id !== post.id)]);
+    try {
+      const response = await fetch(API_BASE + "/api/posts/" + post.id + "/save", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ saved: !wasSaved })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Couldn't update saved posts.");
+      notify(result.saved ? "Post saved." : "Removed from Saved.");
+    } catch (error) {
+      setSaved(old => wasSaved ? (old.includes(post.id) ? old : [...old, post.id]) : old.filter(id => id !== post.id));
+      setSavedPosts(old => wasSaved ? (old.some(item => item.id === post.id) ? old : [post, ...old]) : old.filter(item => item.id !== post.id));
+      notify(error?.message || "Couldn't update saved posts.");
+    }
+  }
   async function toggleBlock(person, shouldBlock) {
     if (!person.id) { notify("Only registered accounts can be blocked."); return; }
     try {
@@ -487,10 +513,10 @@ function App() {
   function PostCard({ post }) {
     const isLiked = liked.includes(post.id);
     return <article className="post-card" key={post.id}>
-      <div className="post-header"><Avatar initials={post.initials} tone={post.tone}/><div className="post-author"><strong>{post.name}</strong><span>{post.handle} · {post.time}</span></div><button className="icon-button post-more" aria-label="Post options" onClick={() => { setSaved(old => old.includes(post.id) ? old.filter(x => x !== post.id) : [...old, post.id]); notify(saved.includes(post.id) ? "Removed from Saved." : "Post saved."); }}><MoreHorizontal size={21}/></button></div>
+      <div className="post-header"><Avatar initials={post.initials} tone={post.tone}/><div className="post-author"><strong>{post.name}</strong><span>{post.handle} · {post.time}</span></div><button className="icon-button post-more" aria-label="Post options" onClick={() => notify("More post options will be available here.")}><MoreHorizontal size={21}/></button></div>
       <p className="post-copy">{post.text}</p><div className="post-tag"># {post.topic || "community"}</div>
       <div className="post-stats"><span>{post.likes} likes</span><span>{post.comments} comments</span></div>
-      <div className="post-actions"><button className={isLiked ? "liked" : ""} onClick={() => toggleLike(post)}><Heart size={18} fill={isLiked ? "currentColor" : "none"}/> Like</button><button onClick={() => openComments(post.id)}><MessageSquare size={18}/> Comment</button><button onClick={() => notify("Repost preview: this action is not yet connected to a server.")}><Repeat2 size={18}/> Repost</button><button aria-label="Share post" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(window.location.href).catch(()=>{}); notify("Share link copied when clipboard access is available."); }}><Share2 size={18}/></button><button aria-label="Save post" className={saved.includes(post.id) ? "liked" : ""} onClick={() => { setSaved(old => old.includes(post.id) ? old.filter(x => x !== post.id) : [...old, post.id]); notify(saved.includes(post.id) ? "Removed from Saved." : "Post saved."); }}><Bookmark size={18} fill={saved.includes(post.id) ? "currentColor" : "none"}/></button></div>
+      <div className="post-actions"><button className={isLiked ? "liked" : ""} onClick={() => toggleLike(post)}><Heart size={18} fill={isLiked ? "currentColor" : "none"}/> Like</button><button onClick={() => openComments(post.id)}><MessageSquare size={18}/> Comment</button><button onClick={() => notify("Repost preview: this action is not yet connected to a server.")}><Repeat2 size={18}/> Repost</button><button aria-label="Share post" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(window.location.href).catch(()=>{}); notify("Share link copied when clipboard access is available."); }}><Share2 size={18}/></button><button aria-label="Save post" className={saved.includes(post.id) ? "liked" : ""} onClick={() => toggleSave(post)}><Bookmark size={18} fill={saved.includes(post.id) ? "currentColor" : "none"}/></button></div>
     </article>;
   }
   function HomePage() {
@@ -540,7 +566,7 @@ function App() {
     const items=[["NC","Nia Carter","started following you.","2 min ago","lavender"],["TA","Tobi Adeyemi","mentioned you in a conversation.","1 hr ago","mint"],["LM","Leah Morgan","liked your post.","3 hr ago","peach"],["G","Gist Up","Welcome! Start by finding people and topics you enjoy.","Yesterday","lavender"]];
     return <div className="content-panel notifications-panel"><div className="notification-tabs">{["All","Mentions","Follows"].map(t=><button className={notificationFilter===t?"tab-active":""} onClick={()=>setNotificationFilter(t)} key={t}>{t}</button>)}<button className="text-button mark-read" onClick={()=>notify("All notifications marked as read in this preview.")}>Mark all as read</button></div>{items.filter((it,i)=>notificationFilter==="All"||(notificationFilter==="Mentions"&&i===1)||(notificationFilter==="Follows"&&i===0)).map(([initials,name,action,time,tone],i)=><div className="notification-row" key={name}><Avatar initials={initials} tone={tone}/><div><p><strong>{name}</strong> {action}</p><span>{time}</span></div>{i===0&&<i/>}</div>)}</div>;
   }
-  function SavedPage() { const savedPosts=posts.filter(p=>saved.includes(p.id)); return <div className="screen-stack">{savedPosts.length?savedPosts.map(post=><PostCard post={post} key={post.id}/>):<div className="empty-panel"><div className="placeholder-icon"><Bookmark size={27}/></div><h2>Your saved posts live here</h2><p>Tap the bookmark on a post to keep it close for later.</p><button className="primary-button" onClick={()=>go("Home")}>Explore your feed <ArrowRight size={16}/></button></div>}</div>; }
+  function SavedPage() { return <div className="screen-stack">{savedPosts.length?savedPosts.map(post=><PostCard post={post} key={post.id}/>):<div className="empty-panel"><div className="placeholder-icon"><Bookmark size={27}/></div><h2>Your saved posts live here</h2><p>Tap the bookmark on a post to keep it close for later.</p><button className="primary-button" onClick={()=>go("Home")}>Explore your feed <ArrowRight size={16}/></button></div>}</div>; }
   function ProfilePage() {
     const myPosts=posts.filter(p=>p.handle===handle);
     return <div className="screen-stack"><section className="profile-page-card"><div className="profile-page-cover"><button className="cover-edit" onClick={()=>notify("Cover photo upload will be connected later.")}><Camera size={15}/> Edit cover</button></div><div className="profile-page-body"><Avatar initials={myInitials} size="profile-avatar"/><button className="outline-button edit-profile-button" onClick={()=>setEditProfile(true)}><Pencil size={14}/> Edit profile</button><h2>{displayName}</h2><span className="profile-handle">{handle}</span><p>{profileBio}</p><div className="profile-page-stats"><span><b>{myPosts.length}</b> posts</span><span><b>{following.length}</b> following</span><span><b>0</b> followers</span></div><div className="profile-tabs">{["Posts","Replies","Media","Likes"].map(t=><button className={profileTab===t?"tab-active":""} onClick={()=>setProfileTab(t)} key={t}>{t}</button>)}</div></div></section>{profileTab==="Posts"&&myPosts.length?myPosts.map(post=><PostCard post={post} key={post.id}/>):<div className="empty-panel compact-empty"><h3>{profileTab==="Posts"?"Your story starts with a post":profileTab+" will appear here"}</h3><p>{profileTab==="Posts"?"Share something with your community to get started.":"This profile section is empty in the current preview."}</p><button className="primary-button" onClick={()=>setComposerOpen(true)}><Plus size={16}/> Create post</button></div>}</div>;
