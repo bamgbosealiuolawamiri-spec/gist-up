@@ -449,6 +449,31 @@ function App() {
       notify(error?.message || "Unable to check the AI connection.");
     }
   }
+  function localGistyReply(prompt) {
+    const lower = prompt.toLowerCase();
+    if (/post idea|ideas for|content idea|what should i post/.test(lower)) {
+      return "Gisty AI · Starter mode\n\nHere are 5 post ideas for Gist Up:\n\n1. Share one small win from this week.\n2. Tell a short story about something you learned.\n3. Ask your followers for a recommendation.\n4. Show a behind-the-scenes moment from a project you are working on.\n5. Ask a friendly question about a topic your community cares about.\n\nTip: add your own experience so the post feels personal.";
+    }
+    if (/caption|rewrite|improve|polish/.test(lower)) {
+      const supplied = prompt.replace(/^(please\s+)?(improve|rewrite|polish)\s+(my\s+)?(caption\s*)?[:—-]?\s*/i, "").trim();
+      if (supplied.length > 12) return "Gisty AI · Starter mode\n\nHere is a simple way to improve it: make the main point clear, add one specific detail, and finish with a question that invites replies.\n\nYour text: " + supplied;
+      return "Gisty AI · Starter mode\n\nPaste the caption you want to improve, and I can help you make it clearer and more engaging.";
+    }
+    if (/hashtag|#tags?/.test(lower)) {
+      const words = lower.match(/[a-z0-9]{4,}/g) || [];
+      const ignored = new Set(["hashtags","suggest","please","about","using","with","give","make","some","post"]);
+      const tags = [...new Set(words.filter(word => !ignored.has(word)))].slice(0,5);
+      return "Gisty AI · Starter mode\n\nHashtag ideas: " + (tags.length ? tags.map(word => "#" + word).join(" ") : "#GistUp #YourStory #Community #DailyGist") + "\n\nUse only tags that genuinely match your post.";
+    }
+    if (/community|conversation topic|discussion topic/.test(lower)) {
+      return "Gisty AI · Starter mode\n\nTry one of these community questions:\n\n1. What is something you are learning this month?\n2. What tool or resource would you recommend to others?\n3. What is one small win you are celebrating today?\n4. What do you wish more people understood about your interests?";
+    }
+    if (/bio|profile description/.test(lower)) {
+      return "Gisty AI · Starter mode\n\nBio idea: “Sharing my projects, lessons, and everyday moments. Always learning and open to good conversations.”\n\nPersonalise it so it accurately describes you.";
+    }
+    return "Gisty AI · Starter mode\n\nI can help with post ideas, captions, hashtags, profile bios, and community discussion topics. Try: “Give me 5 post ideas for a new social app.”\n\nThe full AI provider is not responding right now, so this is a built-in starter reply.";
+  }
+
   async function askGistyAI() {
     const prompt = assistantPrompt.trim();
     if (!prompt || assistantBusy) return;
@@ -460,17 +485,13 @@ function App() {
         body: JSON.stringify({ prompt })
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const message = result.error || (response.status === 401
-          ? "Your session may have expired. Please sign in again and retry."
-          : "Gisty AI couldn't respond right now.");
-        throw new Error(message);
+      if (!response.ok || !result.reply) {
+        setAssistantReply(localGistyReply(prompt));
+        return;
       }
-      if (!result.reply) throw new Error("Gisty AI returned an empty reply. Please try again.");
       setAssistantReply(result.reply);
-    } catch (error) {
-      const message = error?.message || "Gisty AI couldn't respond right now.";
-      setAssistantReply("I couldn't complete that request. " + message);
+    } catch {
+      setAssistantReply(localGistyReply(prompt));
     } finally {
       setAssistantBusy(false);
     }
@@ -970,7 +991,7 @@ function App() {
   function CreatorStudioPage() {
     return <div className="screen-stack"><section className="feature-panel"><div><span className="welcome-pill"><Sparkles size={13}/> CREATOR SPACE</span><h2>Make something meaningful.</h2><p>Draft your next post, review your recent activity, and keep your ideas moving.</p><button className="primary-button" onClick={()=>setComposerOpen(true)}><Plus size={16}/> Create a post</button></div><WandSparkles size={58}/></section><div className="stats-grid"><div className="stat-card"><span>Posts in preview</span><b>{posts.filter(p=>p.handle===handle).length}</b><small><FileText size={14}/> Published drafts</small></div><div className="stat-card"><span>Total likes</span><b>{posts.filter(p=>p.handle===handle).reduce((n,p)=>n+p.likes,0)}</b><small><Heart size={14}/> Engagement preview</small></div><div className="stat-card"><span>Following</span><b>{following.length}</b><small><Users size={14}/> Your connections</small></div></div><section className="content-panel"><div className="section-title"><h2>Your recent posts</h2><button className="text-button" onClick={()=>go("Profile")}>View profile</button></div>{posts.filter(p=>p.handle===handle).length?posts.filter(p=>p.handle===handle).map(p=><PostCard post={p} key={p.id}/>):<p className="empty-state">You haven't published a post in this preview yet.</p>}</section><section className="content-panel"><div className="section-title"><h2>Creator tools</h2></div><div className="tool-grid"><button onClick={()=>setComposerOpen(true)}><Pencil size={19}/><strong>Post composer</strong><span>Write and share an update</span></button><button onClick={()=>go("Explore")}><TrendingUp size={19}/><strong>Discover trends</strong><span>Find relevant conversations</span></button><button onClick={()=>go("AI Assistant")}><Bot size={19}/><strong>Idea assistant</strong><span>Get help with your next idea</span></button></div></section></div>;
   }
-  function AssistantPage() { return <div className="assistant-page"><section className="assistant-hero"><div className="assistant-orb"><Sparkles size={28}/></div><span className="welcome-pill">GISTY AI · YOUR CREATIVE SIDEKICK</span><h2>What are we creating today?</h2><p>Brainstorm post ideas, refine a caption, plan community conversations, and find a fresh way to tell your story.</p><div className="prompt-chips">{["Give me post ideas","Improve my caption","Suggest a community topic"].map(x=><button key={x} onClick={()=>setAssistantPrompt(x)}>{x}</button>)}</div><div className="assistant-status-row"><span className={"assistant-status-dot "+(assistantStatus==="ready"?"ready":assistantStatus==="needs-key"||assistantStatus==="error"?"needs-attention":"")}/><span>{assistantStatus==="ready"?"AI provider configured"+(assistantModel?" · "+assistantModel:""):assistantStatus==="needs-key"?"Provider key required":assistantStatus==="checking"?"Checking provider configuration…":assistantStatus==="error"?"Could not check provider status":"AI provider status not checked"}</span><button className="outline-button compact" onClick={checkGistyAIStatus} disabled={assistantStatus==="checking"}>{assistantStatus==="checking"?"Checking…":"Check connection"}</button></div></section>{assistantReply&&<div className="assistant-reply"><Avatar initials="GA" tone="lavender"/><div><strong>Gisty AI</strong><p>{assistantReply}</p></div></div>}<div className="assistant-input"><textarea value={assistantPrompt} onChange={e=>setAssistantPrompt(e.target.value)} maxLength={2000} placeholder="Tell Gisty AI what you want help with…"/><button className="primary-button" onClick={askGistyAI} disabled={!assistantPrompt.trim()||assistantBusy}>{assistantBusy?"Thinking…":<><Send size={16}/> Ask Gisty AI</>}</button><small>Gisty AI may make mistakes. Review suggestions before posting.</small></div></div>; }
+  function AssistantPage() { return <div className="assistant-page"><section className="assistant-hero"><div className="assistant-orb"><Sparkles size={28}/></div><span className="welcome-pill">GISTY AI · YOUR CREATIVE SIDEKICK</span><h2>What are we creating today?</h2><p>Brainstorm post ideas, refine a caption, plan community conversations, and find a fresh way to tell your story.</p><div className="prompt-chips">{["Give me post ideas","Improve my caption","Suggest a community topic"].map(x=><button key={x} onClick={()=>setAssistantPrompt(x)}>{x}</button>)}</div><div className="assistant-status-row"><span className={"assistant-status-dot "+(assistantStatus==="ready"?"ready":assistantStatus==="needs-key"||assistantStatus==="error"?"needs-attention":"")}/><span>{assistantStatus==="ready"?"AI provider configured"+(assistantModel?" · "+assistantModel:""):assistantStatus==="needs-key"?"Provider key required":assistantStatus==="checking"?"Checking provider configuration…":assistantStatus==="error"?"Could not check provider status":"AI provider status not checked"}</span><button className="outline-button compact" onClick={checkGistyAIStatus} disabled={assistantStatus==="checking"}>{assistantStatus==="checking"?"Checking…":"Check connection"}</button></div></section>{assistantReply&&<div className="assistant-reply"><Avatar initials="GA" tone="lavender"/><div><strong>Gisty AI</strong><p style={{ whiteSpace: "pre-line" }}>{assistantReply}</p></div></div>}<div className="assistant-input"><textarea value={assistantPrompt} onChange={e=>setAssistantPrompt(e.target.value)} maxLength={2000} placeholder="Tell Gisty AI what you want help with…"/><button className="primary-button" onClick={askGistyAI} disabled={!assistantPrompt.trim()||assistantBusy}>{assistantBusy?"Thinking…":<><Send size={16}/> Ask Gisty AI</>}</button><small>Gisty AI may make mistakes. Review suggestions before posting.</small></div></div>; }
   function AdsManagerPage() {
     return <div className="screen-stack">
       <section className="feature-panel"><div><span className="welcome-pill"><Megaphone size={13}/> PROMOTION WORKSPACE</span><h2>Help the right people find you.</h2><p>Build campaign drafts, set a goal, and plan a daily budget before ads are reviewed for delivery.</p><button className="primary-button" onClick={()=>setCampaignModalOpen(true)}><Plus size={16}/> Create campaign</button></div><BarChart3 size={56}/></section>
