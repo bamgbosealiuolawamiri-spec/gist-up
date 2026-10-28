@@ -15,4 +15,10 @@
 .assistant-status-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:#fff;font-size:13px;color:var(--muted)}.assistant-status-row>span:nth-child(2){flex:1;min-width:160px}.assistant-status-dot{width:8px;height:8px;border-radius:50%;background:#9ca3af;flex:0 0 auto}.assistant-status-dot.ready{background:#16a34a}.assistant-status-dot.needs-attention{background:#dc2626}
 
 .profile-reply-card{display:grid;gap:12px}.reply-context{border-left:3px solid var(--purple);background:rgba(108,59,255,.055);border-radius:0 12px 12px 0;padding:12px 14px}.reply-context>span{font-size:12px;color:var(--muted)}.reply-context p{margin:8px 0 10px;color:var(--muted);font-size:14px;line-height:1.5}.reply-context .text-button{display:inline-flex;align-items:center;gap:6px}
-\n\n/* Clickable account identities for public profiles */\n.profile-link { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; font-weight: inherit; text-align: left; cursor: pointer; }\n.profile-link:hover { text-decoration: underline; }\n.profile-avatar-link { border: 0; padding: 0; background: transparent; cursor: pointer; border-radius: 50%; }\n.profile-actions { display: flex; justify-content: flex-end; margin-top: -2.5rem; margin-bottom: 1rem; }\n
+
+
+/* Clickable account identities for public profiles */
+.profile-link { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; font-weight: inherit; text-align: left; cursor: pointer; }
+.profile-link:hover { text-decoration: underline; }
+.profile-avatar-link { border: 0; padding: 0; background: transparent; cursor: pointer; border-radius: 50%; }
+.profile-actions { display: flex; justify-content: flex-end; margin-top: -2.5rem; margin-bottom: 1rem; }
