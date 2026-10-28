@@ -397,6 +397,39 @@ app.post("/api/posts", authenticate, async (req, res) => {
 
 const GISTY_SYSTEM_PROMPT = "You are Gisty AI, the helpful creative sidekick inside Gist Up. Help people brainstorm social posts, improve captions, plan community conversations, and express ideas clearly. Be friendly, concise, inclusive, and practical. Do not claim to have performed actions in the app. If asked for facts that may be outdated, be transparent about uncertainty.";
 
+function builtInGistyReply(prompt) {
+  const text = String(prompt || "").trim();
+  const lower = text.toLowerCase();
+  const topic = text.replace(/^(give me|suggest|write|create|help me|improve|rewrite|make)\\s+/i, "").trim();
+
+  if (/hashtag|#tags?/.test(lower)) {
+    const words = text.toLowerCase().match(/[a-z0-9]{4,}/g) || [];
+    const ignored = new Set(["hashtags", "suggest", "please", "about", "using", "with", "give", "make", "some", "post"]);
+    const tags = [...new Set(words.filter(word => !ignored.has(word)))].slice(0, 5);
+    return "Here are a few hashtag ideas to adapt to your post: " + (tags.length ? tags.map(word => "#" + word).join(" ") : "#GistUp #YourStory #Community #DailyGist #Connect") + ".\\n\\nTip: use a small set of relevant hashtags rather than adding tags that don't match your post.";
+  }
+  if (/caption|rewrite|improve|polish|make it better/.test(lower)) {
+    const supplied = text.replace(/^(please\\s+)?(improve|rewrite|polish|make)\\s+(my\\s+)?(caption|this|it)?\\s*[:—-]?\\s*/i, "").trim();
+    if (supplied && supplied.length > 12 && !/^(my caption|this caption|it|caption)$/i.test(supplied)) {
+      return "Here’s a clearer version you can adapt:\\n\\n" + supplied.replace(/\\s+/g, " ").replace(/[.!?]*$/, "") + ".\\n\\nIf you want, add one personal detail or a question at the end to invite people to join the conversation.";
+    }
+    return "Paste the caption you want to improve, and I can help polish it. A simple structure is: your main point + one personal detail + a question that invites replies.";
+  }
+  if (/post idea|ideas for|content idea|what should i post/.test(lower)) {
+    return "Here are 5 post ideas for Gist Up:\\n\\n1. A small win you had this week.\\n2. Something useful you learned recently.\\n3. Ask your community for recommendations.\\n4. Share a behind-the-scenes look at something you’re building.\\n5. Start a friendly debate about a topic your community cares about.\\n\\nChoose the one that feels most like you and add your own experience.";
+  }
+  if (/community|conversation topic|discussion topic/.test(lower)) {
+    return "Try one of these community conversation starters:\\n\\n• What is one thing you wish more people understood about your interests?\\n• What are you learning or working on this month?\\n• What local place, tool, or resource would you recommend to others?\\n• What small win are you celebrating today?\\n\\nKeep the question welcoming and avoid asking people to share private information.";
+  }
+  if (/bio|profile description/.test(lower)) {
+    return "A simple profile bio formula is: what you’re interested in + what you share here + one personal detail.\\n\\nExample: “Creative thinker sharing my projects, lessons, and everyday moments. Always learning and open to good conversations.”\\n\\nReplace the example with details that are true for you.";
+  }
+  if (/hello|hi there|hey gisty|^hi[!. ]*$/.test(lower)) {
+    return "Hey! I’m Gisty AI’s built-in starter assistant. I can help with post ideas, captions, hashtags, profile bios, and community conversation starters. What are you creating today?";
+  }
+  return "I can help with a few Gist Up writing tasks right now: try “Give me post ideas,” “Improve my caption: [paste your caption],” “Suggest hashtags for my post about [topic],” or “Suggest a community topic.”\\n\\nThis is the built-in starter mode, not a full conversational AI model. We’re keeping it available while we work on a suitable AI provider connection.";
+}
+
 app.get("/api/ai/status", authenticate, async (_req, res) => {
   const provider = process.env.GEMINI_API_KEY ? "gemini" : process.env.OPENAI_API_KEY ? "openai" : null;
   const model = provider === "gemini"
@@ -404,7 +437,7 @@ app.get("/api/ai/status", authenticate, async (_req, res) => {
     : provider === "openai"
       ? (process.env.OPENAI_MODEL || "gpt-4o-mini")
       : null;
-  return res.json({ configured: Boolean(provider), provider, model });
+  return res.json({ configured: Boolean(provider) || true, provider: provider || "built-in", model: model || "Starter writing tools" });
 });
 
 app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
@@ -415,7 +448,7 @@ app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
   const geminiKey = process.env.GEMINI_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
   if (!geminiKey && !openaiKey) {
-    return res.status(503).json({ error: "Gisty AI still needs an AI provider key configured in the backend." });
+    return res.json({ reply: builtInGistyReply(prompt), mode: "built-in" });
   }
 
   try {
@@ -436,6 +469,7 @@ app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         console.error("Gemini provider request failed:", response.status, data?.error?.status || data?.error?.code || "provider_error");
+        if (response.status === 429) return res.json({ reply: builtInGistyReply(prompt), mode: "built-in" });
         return res.status(502).json({ error: "Gisty AI couldn't respond right now. Please try again shortly." });
       }
       reply = String(data?.candidates?.[0]?.content?.parts?.map(part => part.text || "").join("") || "").trim();
@@ -456,6 +490,7 @@ app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         console.error("OpenAI provider request failed:", response.status, data?.error?.type || "provider_error");
+        if (response.status === 429) return res.json({ reply: builtInGistyReply(prompt), mode: "built-in" });
         return res.status(502).json({ error: "Gisty AI couldn't respond right now. Please try again shortly." });
       }
       reply = String(data?.choices?.[0]?.message?.content || "").trim();
