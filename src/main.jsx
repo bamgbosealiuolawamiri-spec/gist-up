@@ -337,6 +337,7 @@ function App() {
   function go(label) { if (label === "Profile") setSelectedProfile(null); setActive(label); setMobileNav(false); }
   async function openUserProfile(person) {
     if (!person?.id) { notify("This account profile isn't available."); return; }
+    if (authUser && String(person.id) === String(authUser.id)) { setSelectedProfile(null); setActive("Profile"); setMobileNav(false); return; }
     try {
       const response = await fetch(API_BASE + "/api/users/" + encodeURIComponent(person.id) + "/profile", { credentials: "include" });
       const result = await response.json().catch(() => ({}));
