@@ -437,7 +437,7 @@ app.get("/api/ai/status", authenticate, async (_req, res) => {
     : provider === "openai"
       ? (process.env.OPENAI_MODEL || "gpt-4o-mini")
       : null;
-  return res.json({ configured: Boolean(provider) || true, provider: provider || "built-in", model: model || "Starter writing tools" });
+  return res.json({ configured: Boolean(provider), provider: provider || "built-in", model: model || "Starter writing tools", starterMode: true });
 });
 
 app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
