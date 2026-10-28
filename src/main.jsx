@@ -442,8 +442,8 @@ function App() {
       if (!response.ok) throw new Error(result.error || "Unable to check the AI connection.");
       setAssistantModel(result.model || "");
       setAssistantStatus(result.configured ? "ready" : "needs-key");
-      if (!result.configured) notify("Gisty AI needs an OpenAI API key in the backend environment.");
-      else notify("Gisty AI provider key is configured.");
+      if (!result.configured) notify("Gisty AI is using built-in starter mode; a provider key is not connected.");
+      else notify("Gisty AI provider is configured: " + (result.provider || "AI") + ".");
     } catch (error) {
       setAssistantStatus("error");
       notify(error?.message || "Unable to check the AI connection.");
@@ -453,16 +453,24 @@ function App() {
     const prompt = assistantPrompt.trim();
     if (!prompt || assistantBusy) return;
     setAssistantBusy(true);
+    setAssistantReply("Gisty AI is working on your request…");
     try {
       const response = await fetch(API_BASE + "/api/ai/chat", {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt })
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || "Gisty AI couldn't respond right now.");
-      setAssistantReply(result.reply || "");
+      if (!response.ok) {
+        const message = result.error || (response.status === 401
+          ? "Your session may have expired. Please sign in again and retry."
+          : "Gisty AI couldn't respond right now.");
+        throw new Error(message);
+      }
+      if (!result.reply) throw new Error("Gisty AI returned an empty reply. Please try again.");
+      setAssistantReply(result.reply);
     } catch (error) {
-      notify(error?.message || "Gisty AI couldn't respond right now.");
+      const message = error?.message || "Gisty AI couldn't respond right now.";
+      setAssistantReply("I couldn't complete that request. " + message);
     } finally {
       setAssistantBusy(false);
     }
