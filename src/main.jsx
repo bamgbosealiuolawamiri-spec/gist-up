@@ -424,11 +424,14 @@ function App() {
       setFollowing(old => result.following ? (old.includes(person.handle) ? old : [...old, person.handle]) : old.filter(x => x !== person.handle));
       setPeople(old => old.map(item => item.id === person.id ? { ...item, isFollowing: result.following, followersCount: result.followersCount } : item));
       setSelectedProfile(old => old && String(old.id) === String(person.id) ? { ...old, isFollowing: result.following, followersCount: Number(result.followersCount || 0) } : old);
+      notify(result.following ? "You're now following this person." : "You unfollowed this person.");
+      return true;
     } catch (error) {
       setFollowing(old => wasFollowing ? (old.includes(person.handle) ? old : [...old, person.handle]) : old.filter(x => x !== person.handle));
       setPeople(old => old.map(item => item.id === person.id ? { ...item, isFollowing: wasFollowing } : item));
       setSelectedProfile(old => old && String(old.id) === String(person.id) ? { ...old, isFollowing: wasFollowing } : old);
       notify(error?.message || "Couldn't update following.");
+      return false;
     }
   }
   async function checkGistyAIStatus() {
@@ -937,7 +940,10 @@ function App() {
         <div className="profile-page-body">
           <Avatar initials={profile.initials} size="profile-avatar"/>
           <div className="profile-actions">
-            <button className={profile.isFollowing ? "outline-button" : "primary-button"} onClick={() => toggleFollow(person)}>
+            <button className={profile.isFollowing ? "outline-button" : "primary-button"} onClick={async () => {
+              const updated = await toggleFollow(person);
+              if (updated) await openUserProfile(person);
+            }}>
               {profile.isFollowing ? <><Check size={15}/> Following</> : <><UserPlus size={15}/> {profile.followsYou ? "Follow back" : "Follow"}</>}
             </button>
           </div>
