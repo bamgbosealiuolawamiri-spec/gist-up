@@ -723,7 +723,7 @@ app.get("/api/users", authenticate, async (req, res) => {
 
 app.get("/api/users/:id/profile", authenticate, async (req, res) => {
   const targetId = String(req.params.id || "");
-  if (!/^\\d+$/.test(targetId)) return res.status(400).json({ error: "Choose a valid account." });
+  if (!/^\d+$/.test(targetId)) return res.status(400).json({ error: "Choose a valid account." });
   if (targetId === String(req.user.id)) return res.json({ profile: req.user, isFollowing: false, followsYou: false, posts: [] });
   try {
     const blocked = await pool.query(
@@ -757,7 +757,7 @@ app.get("/api/users/:id/profile", authenticate, async (req, res) => {
     const posts = postsResult.rows.map(post => ({
       id: post.id, text: post.content, name: post.full_name, handle: "@" + post.username,
       time: new Date(post.created_at).toLocaleString(),
-      initials: String(post.full_name || post.username).split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
+      initials: String(post.full_name || post.username).split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
       tone: "lavender", likes: post.likes || 0, comments: post.comments || 0, reposts: post.reposts || 0,
       isLiked: post.is_liked === true, isReposted: post.is_reposted === true, topic: "Community", authorId: post.author_id
     }));
