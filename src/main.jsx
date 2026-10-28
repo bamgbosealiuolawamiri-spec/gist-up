@@ -100,7 +100,8 @@ function App() {
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
-  const [authUser, setAuthUser] = useState(null);\n  const [selectedProfile, setSelectedProfile] = useState(null);
+  const [authUser, setAuthUser] = useState(null);
+  const [selectedProfile, setSelectedProfile] = useState(null);
 
   async function loadAppData(fallbackUser = null) {
     try {
@@ -346,7 +347,7 @@ function App() {
         name: profile.full_name,
         handle: "@" + profile.username,
         bio: profile.bio || "",
-        initials: String(profile.full_name || profile.username).split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
+        initials: String(profile.full_name || profile.username).split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
         followersCount: Number(result.followersCount || 0),
         followingCount: Number(result.followingCount || 0),
         isFollowing: result.isFollowing === true,
@@ -420,10 +421,12 @@ function App() {
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "Couldn't update following.");
       setFollowing(old => result.following ? (old.includes(person.handle) ? old : [...old, person.handle]) : old.filter(x => x !== person.handle));
-      setPeople(old => old.map(item => item.id === person.id ? { ...item, isFollowing: result.following, followersCount: result.followersCount } : item));\n      setSelectedProfile(old => old && String(old.id) === String(person.id) ? { ...old, isFollowing: result.following, followersCount: Number(result.followersCount || 0) } : old);
+      setPeople(old => old.map(item => item.id === person.id ? { ...item, isFollowing: result.following, followersCount: result.followersCount } : item));
+      setSelectedProfile(old => old && String(old.id) === String(person.id) ? { ...old, isFollowing: result.following, followersCount: Number(result.followersCount || 0) } : old);
     } catch (error) {
       setFollowing(old => wasFollowing ? (old.includes(person.handle) ? old : [...old, person.handle]) : old.filter(x => x !== person.handle));
-      setPeople(old => old.map(item => item.id === person.id ? { ...item, isFollowing: wasFollowing } : item));\n      setSelectedProfile(old => old && String(old.id) === String(person.id) ? { ...old, isFollowing: wasFollowing } : old);
+      setPeople(old => old.map(item => item.id === person.id ? { ...item, isFollowing: wasFollowing } : item));
+      setSelectedProfile(old => old && String(old.id) === String(person.id) ? { ...old, isFollowing: wasFollowing } : old);
       notify(error?.message || "Couldn't update following.");
     }
   }
