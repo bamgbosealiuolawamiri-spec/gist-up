@@ -477,22 +477,34 @@ function App() {
   async function askGistyAI() {
     const prompt = assistantPrompt.trim();
     if (!prompt || assistantBusy) return;
+
+    // Show a useful answer immediately. The app must not appear broken while
+    // the remote API wakes up, rejects the session, or has provider problems.
+    const starterReply = localGistyReply(prompt);
+    setAssistantReply(starterReply);
     setAssistantBusy(true);
-    setAssistantReply("Gisty AI is working on your request…");
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
     try {
       const response = await fetch(API_BASE + "/api/ai/chat", {
-        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt })
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+        signal: controller.signal
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok || !result.reply) {
-        setAssistantReply(localGistyReply(prompt));
-        return;
+
+      // Replace the starter answer only when the server returns a real reply.
+      // Keep the visible starter answer if auth/provider/network fails.
+      if (response.ok && typeof result.reply === "string" && result.reply.trim()) {
+        setAssistantReply(result.reply);
       }
-      setAssistantReply(result.reply);
     } catch {
-      setAssistantReply(localGistyReply(prompt));
+      // The starter reply is already visible, so no additional error is needed.
     } finally {
+      clearTimeout(timeoutId);
       setAssistantBusy(false);
     }
   }
