@@ -721,6 +721,60 @@ app.get("/api/users", authenticate, async (req, res) => {
   }
 });
 
+app.get("/api/users/:id/profile", authenticate, async (req, res) => {
+  const targetId = String(req.params.id || "");
+  if (!/^\\d+$/.test(targetId)) return res.status(400).json({ error: "Choose a valid account." });
+  if (targetId === String(req.user.id)) return res.json({ profile: req.user, isFollowing: false, followsYou: false, posts: [] });
+  try {
+    const blocked = await pool.query(
+      "SELECT 1 FROM user_blocks WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1) LIMIT 1",
+      [req.user.id, targetId]
+    );
+    if (blocked.rowCount) return res.status(403).json({ error: "This profile isn't available." });
+    const result = await pool.query(
+      `SELECT u.id, u.email, u.full_name, u.username, u.bio, u.avatar_url, u.created_at,
+              EXISTS(SELECT 1 FROM user_follows f WHERE f.follower_id = $1 AND f.followed_id = u.id) AS is_following,
+              EXISTS(SELECT 1 FROM user_follows f WHERE f.follower_id = u.id AND f.followed_id = $1) AS follows_you,
+              (SELECT COUNT(*)::int FROM user_follows f WHERE f.followed_id = u.id) AS followers_count,
+              (SELECT COUNT(*)::int FROM user_follows f WHERE f.follower_id = u.id) AS following_count
+       FROM users u WHERE u.id = $2 LIMIT 1`,
+      [req.user.id, targetId]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Account not found." });
+    const row = result.rows[0];
+    const postsResult = await pool.query(
+      `SELECT p.id, p.content, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url,
+              (SELECT COUNT(*)::int FROM post_likes pl WHERE pl.post_id = p.id) AS likes,
+              (SELECT COUNT(*)::int FROM post_comments pc WHERE pc.post_id = p.id) AS comments,
+              (SELECT COUNT(*)::int FROM post_reposts pr WHERE pr.post_id = p.id) AS reposts,
+              EXISTS(SELECT 1 FROM post_likes mine WHERE mine.post_id = p.id AND mine.user_id = $1) AS is_liked,
+              EXISTS(SELECT 1 FROM post_reposts mine WHERE mine.post_id = p.id AND mine.user_id = $1) AS is_reposted
+       FROM posts p JOIN users u ON u.id = p.user_id
+       WHERE p.user_id = $2
+       ORDER BY p.created_at DESC, p.id DESC LIMIT 100`,
+      [req.user.id, targetId]
+    );
+    const posts = postsResult.rows.map(post => ({
+      id: post.id, text: post.content, name: post.full_name, handle: "@" + post.username,
+      time: new Date(post.created_at).toLocaleString(),
+      initials: String(post.full_name || post.username).split(/\\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
+      tone: "lavender", likes: post.likes || 0, comments: post.comments || 0, reposts: post.reposts || 0,
+      isLiked: post.is_liked === true, isReposted: post.is_reposted === true, topic: "Community", authorId: post.author_id
+    }));
+    return res.json({
+      profile: publicUser(row),
+      isFollowing: row.is_following === true,
+      followsYou: row.follows_you === true,
+      followersCount: Number(row.followers_count || 0),
+      followingCount: Number(row.following_count || 0),
+      posts
+    });
+  } catch (error) {
+    console.error("User profile fetch failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't load this profile right now." });
+  }
+});
+
 app.get("/api/blocks/me", authenticate, async (req, res) => {
   try {
     const result = await pool.query(
