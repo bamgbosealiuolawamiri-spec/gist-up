@@ -60,3 +60,9 @@
 .ai-message .assistant-chat-bubble{border-bottom-left-radius:5px}
 .assistant-chat-history .gisty-avatar{flex:0 0 40px}
 @media(max-width:640px){.post-image{max-height:460px}.assistant-chat-history{max-height:50vh}.assistant-chat-bubble{max-width:92%}.composer-media-tools{flex-wrap:wrap}}
+
+.gisty-input-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;flex-wrap:wrap}
+.gisty-image-mode-active{background:#eee7ff!important;border-color:#8b5cf6!important;color:#6035c9!important}
+.gisty-generated-image{display:block;width:100%;max-width:560px;max-height:600px;object-fit:contain;border-radius:12px;margin-top:10px;background:#f3f0fa}
+.gisty-image-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.gisty-image-actions a{text-decoration:none}
