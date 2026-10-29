@@ -349,7 +349,7 @@ app.get("/api/posts", authenticate, async (req, res) => {
     `, [req.user.id, String(req.query.feed || 'for-you')]);
     res.json({ posts: result.rows.map(row => ({
       id: row.id,
-      text: row.content,
+      text: String(row.content || "").trim(),
       image_url: row.image_url || null,
       avatar_url: row.avatar_url || null,
       name: row.full_name,
@@ -382,12 +382,12 @@ app.post("/api/posts", authenticate, async (req, res) => {
       `INSERT INTO posts (user_id, content, image_url)
        VALUES ($1, $2, $3)
        RETURNING id, content, image_url, created_at`,
-      [req.user.id, content, imageUrl]
+      [req.user.id, content || (imageUrl ? " " : ""), imageUrl]
     );
     const row = result.rows[0];
     res.status(201).json({ post: {
       id: row.id,
-      text: row.content,
+      text: String(row.content || "").trim(),
       image_url: row.image_url || null,
       avatar_url: req.user.avatar_url || null,
       name: req.user.full_name,
@@ -407,7 +407,7 @@ app.post("/api/posts", authenticate, async (req, res) => {
 });
 
 
-const GISTY_SYSTEM_PROMPT = "You are Gisty AI, the helpful creative sidekick inside Gist Up. Help people brainstorm social posts, improve captions, plan community conversations, and express ideas clearly. Be friendly, concise, inclusive, and practical. Do not claim to have performed actions in the app. If asked for facts that may be outdated, be transparent about uncertainty.";
+const GISTY_SYSTEM_PROMPT = "You are Gisty AI, a helpful general-purpose conversational assistant inside Gist Up. Answer general questions, explain concepts, help with reasoning and learning, draft and improve writing, brainstorm ideas, summarize information, and help users make the most of Gist Up. Maintain context across the conversation and answer follow-up questions naturally. Be friendly, clear, practical, and honest. Never claim to have performed actions in the app that you did not perform. If facts may be outdated or uncertain, say so.";
 
 function builtInGistyReply(prompt) {
   const text = String(prompt || "").trim();
@@ -449,7 +449,7 @@ app.get("/api/ai/status", authenticate, async (_req, res) => {
     : provider === "openai"
       ? (process.env.OPENAI_MODEL || "gpt-4o-mini")
       : null;
-  return res.json({ configured: Boolean(provider), provider: provider || "built-in", model: model || "Starter writing tools", starterMode: true });
+  return res.json({ configured: Boolean(provider), provider: provider || "built-in", model: model || "Starter writing tools", starterMode: !provider });
 });
 
 app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
@@ -644,7 +644,7 @@ app.get("/api/likes/me", authenticate, async (req, res) => {
       [req.user.id]
     );
     return res.json({ posts: result.rows.map(row => ({
-      id: row.id, text: row.content, name: row.full_name, handle: "@" + row.username,
+      id: row.id, text: String(row.content || "").trim(), name: row.full_name, handle: "@" + row.username,
       time: new Date(row.created_at).toLocaleString(),
       initials: row.full_name.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
       tone: "lavender", likes: row.likes || 0, comments: row.comments || 0,
@@ -690,7 +690,7 @@ app.get("/api/saved", authenticate, async (req, res) => {
       [req.user.id]
     );
     return res.json({ posts: result.rows.map(row => ({
-      id: row.id, text: row.content, name: row.full_name, handle: "@" + row.username,
+      id: row.id, text: String(row.content || "").trim(), name: row.full_name, handle: "@" + row.username,
       time: new Date(row.created_at).toLocaleString(),
       initials: row.full_name.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
       tone: "lavender", likes: row.likes || 0, comments: row.comments || 0,
