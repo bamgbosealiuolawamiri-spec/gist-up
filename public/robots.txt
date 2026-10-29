@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://gist-up.onrender.com/sitemap.xml
