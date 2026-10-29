@@ -304,7 +304,7 @@ app.patch("/api/profile/me", authenticate, async (req, res) => {
   }
   if (bio.length > 160) return res.status(400).json({ error: "Bio must be 160 characters or fewer." });
   for (const image of [avatarUrl, coverUrl]) {
-    if (image !== undefined && image !== null && (!/^data:image\\/(jpeg|png|webp);base64,/.test(image) || image.length > 1000000)) return res.status(400).json({ error: "Images must be JPG, PNG or WebP and smaller than 1 MB after resizing." });
+    if (image !== undefined && image !== null && (!/^data:image\/(jpeg|png|webp);base64,/.test(image) || image.length > 1000000)) return res.status(400).json({ error: "Images must be JPG, PNG or WebP and smaller than 1 MB after resizing." });
   }
   try {
     const duplicate = await pool.query(
@@ -376,7 +376,7 @@ app.post("/api/posts", authenticate, async (req, res) => {
   const imageUrl = req.body?.imageUrl == null ? null : String(req.body.imageUrl);
   if (!content && !imageUrl) return res.status(400).json({ error: "Write something or add a photo before publishing." });
   if (content.length > 5000) return res.status(400).json({ error: "Posts must be 5,000 characters or fewer." });
-  if (imageUrl && (!/^data:image\\/(jpeg|png|webp);base64,/.test(imageUrl) || imageUrl.length > 1000000)) return res.status(400).json({ error: "Images must be JPG, PNG or WebP and smaller than 1 MB after resizing." });
+  if (imageUrl && (!/^data:image\/(jpeg|png|webp);base64,/.test(imageUrl) || imageUrl.length > 1000000)) return res.status(400).json({ error: "Images must be JPG, PNG or WebP and smaller than 1 MB after resizing." });
   try {
     const result = await pool.query(
       `INSERT INTO posts (user_id, content, image_url)
