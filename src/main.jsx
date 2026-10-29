@@ -306,7 +306,7 @@ function App() {
   }
   async function handleImagePick(event, target) {
     const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
-    try { const data = await prepareImage(file, target === "post" ? 1280 : 1000, target === "post" ? 0.78 : 0.84); if (target === "post") setPostImageData(data); if (target === "avatar") setAvatarImageData(data); if (target === "cover") setCoverImageData(data); }
+    try { const data = await prepareImage(file, target === "post" ? 1280 : 1000, target === "post" ? 0.78 : 0.84); if (target === "post") setPostImageData(data); if (target === "avatar") setAvatarImageData(data); if (target === "cover") { setCoverImageData(data); setEditProfile(true); } }
     catch (error) { notify(error?.message || "Couldn't prepare that image."); }
   }
   async function publish() {
