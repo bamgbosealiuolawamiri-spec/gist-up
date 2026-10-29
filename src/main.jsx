@@ -84,6 +84,7 @@ function App() {
   const [assistantBusy, setAssistantBusy] = useState(false);
   const [assistantStatus, setAssistantStatus] = useState("unknown");
   const [assistantModel, setAssistantModel] = useState("");
+  const [authUser, setAuthUser] = useState(null);
   useEffect(() => {
     if (!authUser?.id) { setAssistantMessages([]); return; }
     try { const savedChat = JSON.parse(localStorage.getItem("gistup:gisty-chat:" + authUser.id) || "[]"); setAssistantMessages(Array.isArray(savedChat) ? savedChat.slice(-40) : []); }
@@ -116,7 +117,6 @@ function App() {
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
-  const [authUser, setAuthUser] = useState(null);
   const [selectedProfile, setSelectedProfile] = useState(null);
 
   async function loadAppData(fallbackUser = null) {
