@@ -64,6 +64,7 @@ const aiLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Gisty AI is getting too many requests. Please wait a minute and try again." }
 });
+const imageLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: "draft-7", legacyHeaders: false, message: { error: "Image generation is rate-limited. Please try again later." } });
 
 function requireConfig(res) {
   if (!pool || !JWT_SECRET) {
@@ -515,6 +516,34 @@ app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
   } catch (error) {
     console.error("AI request failed:", error?.message || "unknown error");
     return res.status(502).json({ error: "Gisty AI couldn't connect right now. Please try again shortly." });
+  }
+});
+
+app.post("/api/ai/image", authenticate, imageLimiter, async (req, res) => {
+  const prompt = String(req.body?.prompt || "").trim();
+  if (!prompt) return res.status(400).json({ error: "Describe the picture you want Gisty AI to create." });
+  if (prompt.length > 1200) return res.status(400).json({ error: "Keep image descriptions under 1,200 characters." });
+  const apiKey = process.env.OPENAI_IMAGE_API_KEY || process.env.OPENAI_API_KEY;
+  if (!apiKey) return res.status(503).json({ error: "Image generation is not connected yet. An eligible AI provider API key must be configured by the site owner." });
+  try {
+    const response = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST", headers: { "Authorization": "Bearer " + apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: process.env.OPENAI_IMAGE_MODEL || "gpt-image-1", prompt, size: "1024x1024", n: 1 })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error("Image provider request failed:", response.status, data?.error?.code || data?.error?.type || "provider_error");
+      if (response.status === 429) return res.status(429).json({ error: "The image provider has reached its usage limit or needs billing configured. Try again after the account is ready." });
+      return res.status(502).json({ error: "The image provider could not create this picture. Please check the provider account and try again." });
+    }
+    const encoded = data?.data?.[0]?.b64_json;
+    const remoteUrl = data?.data?.[0]?.url;
+    if (encoded) return res.json({ imageUrl: "data:image/png;base64," + encoded, model: process.env.OPENAI_IMAGE_MODEL || "gpt-image-1" });
+    if (remoteUrl) return res.json({ imageUrl: remoteUrl, model: process.env.OPENAI_IMAGE_MODEL || "gpt-image-1" });
+    return res.status(502).json({ error: "The image provider returned no usable image." });
+  } catch (error) {
+    console.error("Image generation request failed:", error?.message || "unknown error");
+    return res.status(502).json({ error: "Gisty AI couldn't connect to the image provider. Please try again shortly." });
   }
 });
 
