@@ -444,12 +444,14 @@ function builtInGistyReply(prompt) {
 }
 
 app.get("/api/ai/status", authenticate, async (_req, res) => {
-  const provider = process.env.GEMINI_API_KEY ? "gemini" : process.env.OPENAI_API_KEY ? "openai" : null;
-  const model = provider === "gemini"
-    ? (process.env.GEMINI_MODEL || "gemini-2.5-flash")
-    : provider === "openai"
-      ? (process.env.OPENAI_MODEL || "gpt-4o-mini")
-      : null;
+  const provider = process.env.OPENROUTER_API_KEY ? "openrouter" : process.env.GEMINI_API_KEY ? "gemini" : process.env.OPENAI_API_KEY ? "openai" : null;
+  const model = provider === "openrouter"
+    ? (process.env.OPENROUTER_MODEL || "openrouter/free")
+    : provider === "gemini"
+      ? (process.env.GEMINI_MODEL || "gemini-2.5-flash")
+      : provider === "openai"
+        ? (process.env.OPENAI_MODEL || "gpt-4o-mini")
+        : null;
   return res.json({ configured: Boolean(provider), provider: provider || "built-in", model: model || "Starter writing tools", starterMode: !provider });
 });
 
@@ -460,9 +462,10 @@ app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
   const messages = Array.isArray(req.body?.messages) ? req.body.messages.slice(-18).map(item => ({ role: item?.role === "assistant" ? "assistant" : "user", content: String(item?.content || "").slice(0, 2000) })).filter(item => item.content.trim()) : [{ role: "user", content: prompt }];
   while (messages.length && messages[0].role !== "user") messages.shift();
 
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
   const geminiKey = process.env.GEMINI_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
-  if (!geminiKey && !openaiKey) {
+  if (!openRouterKey && !geminiKey && !openaiKey) {
     return res.json({ reply: builtInGistyReply(prompt), mode: "built-in" });
   }
 
@@ -470,7 +473,33 @@ app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
     let response;
     let reply = "";
 
-    if (geminiKey) {
+    if (openRouterKey) {
+      response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + openRouterKey,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://gist-up.onrender.com",
+          "X-Title": "Gist Up - Gisty AI"
+        },
+        body: JSON.stringify({
+          model: process.env.OPENROUTER_MODEL || "openrouter/free",
+          messages: [
+            { role: "system", content: GISTY_SYSTEM_PROMPT },
+            ...messages.map(item => ({ role: item.role, content: item.content }))
+          ],
+          max_tokens: 600,
+          temperature: 0.7
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        console.error("OpenRouter provider request failed:", response.status, data?.error?.code || data?.error?.message || "provider_error");
+        if (response.status === 429) return res.json({ reply: builtInGistyReply(prompt), mode: "built-in" });
+        return res.status(502).json({ error: "Gisty AI couldn't respond right now. Check that your OpenRouter key and free model are available." });
+      }
+      reply = String(data?.choices?.[0]?.message?.content || "").trim();
+    } else if (geminiKey) {
       const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
       response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(geminiKey)}`, {
         method: "POST",
