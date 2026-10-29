@@ -543,7 +543,14 @@ function App() {
     finally { setAssistantBusy(false); }
   }
 
-  function useGistyImageInPost(imageUrl) { setPostImageData(imageUrl); setPostText(""); setComposerOpen(true); notify("Image added to your post draft. Add a caption and publish when ready."); }
+  async function useGistyImageInPost(imageUrl) {
+    try {
+      const response = await fetch(imageUrl); const blob = await response.blob();
+      const file = new File([blob], "gisty-generated-image.png", { type: blob.type || "image/png" });
+      const resized = await prepareImage(file, 1280, 0.78);
+      setPostImageData(resized); setPostText(""); setComposerOpen(true); notify("Image added to your post draft. Add a caption and publish when ready.");
+    } catch { notify("Couldn't prepare this image for a post. Download it and try uploading it from your device."); }
+  }
 
   async function updateSetting(key, value) {
     const previous = settings[key];
