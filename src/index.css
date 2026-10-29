@@ -66,3 +66,6 @@
 .gisty-generated-image{display:block;width:100%;max-width:560px;max-height:600px;object-fit:contain;border-radius:12px;margin-top:10px;background:#f3f0fa}
 .gisty-image-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .gisty-image-actions a{text-decoration:none}
+
+.assistant-status-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+@media(max-width:560px){.assistant-status-row{align-items:flex-start;flex-wrap:wrap}.assistant-status-actions{width:100%;margin-left:24px}}
