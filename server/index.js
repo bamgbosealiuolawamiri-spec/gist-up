@@ -46,7 +46,7 @@ app.use((req, res, next) => {
 });
 
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.json({ limit: "100kb" }));
+app.use(express.json({ limit: "8mb" }));
 app.use(cookieParser());
 
 const authLimiter = rateLimit({
@@ -81,6 +81,7 @@ function publicUser(row) {
     username: row.username || row.email?.split("@")[0] || "member",
     bio: row.bio || "",
     avatar_url: row.avatar_url || null,
+    cover_url: row.cover_url || null,
     created_at: row.created_at
   };
 }
@@ -124,7 +125,7 @@ async function authenticate(req, res, next) {
   try {
     const payload = jwt.verify(token, JWT_SECRET, { issuer: "gist-up" });
     const result = await pool.query(
-      "SELECT id, email, full_name, username, bio, avatar_url, created_at FROM users WHERE id = $1 LIMIT 1",
+      "SELECT id, email, full_name, username, bio, avatar_url, cover_url, created_at FROM users WHERE id = $1 LIMIT 1",
       [payload.sub]
     );
     if (!result.rowCount) return res.status(401).json({ error: "Your session is no longer valid. Please log in again." });
@@ -293,6 +294,8 @@ app.patch("/api/profile/me", authenticate, async (req, res) => {
   const fullName = String(req.body?.fullName || "").trim();
   const username = cleanUsername(req.body?.username);
   const bio = String(req.body?.bio || "").trim();
+  const avatarUrl = req.body?.avatarUrl === undefined ? undefined : (req.body.avatarUrl === null ? null : String(req.body.avatarUrl));
+  const coverUrl = req.body?.coverUrl === undefined ? undefined : (req.body.coverUrl === null ? null : String(req.body.coverUrl));
   if (fullName.length < 2 || fullName.length > 80) {
     return res.status(400).json({ error: "Display name must be between 2 and 80 characters." });
   }
@@ -300,6 +303,9 @@ app.patch("/api/profile/me", authenticate, async (req, res) => {
     return res.status(400).json({ error: "Username must be 3–30 characters using letters, numbers, or underscores." });
   }
   if (bio.length > 160) return res.status(400).json({ error: "Bio must be 160 characters or fewer." });
+  for (const image of [avatarUrl, coverUrl]) {
+    if (image !== undefined && image !== null && (!/^data:image\\/(jpeg|png|webp);base64,/.test(image) || image.length > 1000000)) return res.status(400).json({ error: "Images must be JPG, PNG or WebP and smaller than 1 MB after resizing." });
+  }
   try {
     const duplicate = await pool.query(
       "SELECT id FROM users WHERE username = $1 AND id <> $2 LIMIT 1",
@@ -307,8 +313,8 @@ app.patch("/api/profile/me", authenticate, async (req, res) => {
     );
     if (duplicate.rowCount) return res.status(409).json({ error: "That username is already taken. Try another one." });
     const result = await pool.query(
-      "UPDATE users SET full_name = $1, username = $2, bio = $3 WHERE id = $4 RETURNING id, email, full_name, username, bio, avatar_url, created_at",
-      [fullName, username, bio, req.user.id]
+      "UPDATE users SET full_name = $1, username = $2, bio = $3, avatar_url = COALESCE($4, avatar_url), cover_url = COALESCE($5, cover_url) WHERE id = $6 RETURNING id, email, full_name, username, bio, avatar_url, cover_url, created_at",
+      [fullName, username, bio, avatarUrl, coverUrl, req.user.id]
     );
     const profile = publicUser(result.rows[0]);
     req.user = profile;
@@ -322,7 +328,7 @@ app.patch("/api/profile/me", authenticate, async (req, res) => {
 app.get("/api/posts", authenticate, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT p.id, p.content, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url,
+      SELECT p.id, p.content, p.image_url, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url,
              (SELECT COUNT(*)::int FROM post_likes pl WHERE pl.post_id = p.id) AS likes,
              (SELECT COUNT(*)::int FROM post_comments pc WHERE pc.post_id = p.id) AS comments,
              (SELECT COUNT(*)::int FROM post_reposts pr WHERE pr.post_id = p.id) AS reposts,
@@ -344,6 +350,8 @@ app.get("/api/posts", authenticate, async (req, res) => {
     res.json({ posts: result.rows.map(row => ({
       id: row.id,
       text: row.content,
+      image_url: row.image_url || null,
+      avatar_url: row.avatar_url || null,
       name: row.full_name,
       handle: "@" + row.username,
       time: new Date(row.created_at).toLocaleString(),
@@ -365,19 +373,23 @@ app.get("/api/posts", authenticate, async (req, res) => {
 
 app.post("/api/posts", authenticate, async (req, res) => {
   const content = String(req.body?.content || "").trim();
-  if (!content) return res.status(400).json({ error: "Write something before publishing." });
+  const imageUrl = req.body?.imageUrl == null ? null : String(req.body.imageUrl);
+  if (!content && !imageUrl) return res.status(400).json({ error: "Write something or add a photo before publishing." });
   if (content.length > 5000) return res.status(400).json({ error: "Posts must be 5,000 characters or fewer." });
+  if (imageUrl && (!/^data:image\\/(jpeg|png|webp);base64,/.test(imageUrl) || imageUrl.length > 1000000)) return res.status(400).json({ error: "Images must be JPG, PNG or WebP and smaller than 1 MB after resizing." });
   try {
     const result = await pool.query(
-      `INSERT INTO posts (user_id, content)
-       VALUES ($1, $2)
-       RETURNING id, content, created_at`,
-      [req.user.id, content]
+      `INSERT INTO posts (user_id, content, image_url)
+       VALUES ($1, $2, $3)
+       RETURNING id, content, image_url, created_at`,
+      [req.user.id, content, imageUrl]
     );
     const row = result.rows[0];
     res.status(201).json({ post: {
       id: row.id,
       text: row.content,
+      image_url: row.image_url || null,
+      avatar_url: req.user.avatar_url || null,
       name: req.user.full_name,
       handle: "@" + req.user.username,
       time: new Date(row.created_at).toLocaleString(),
@@ -444,6 +456,8 @@ app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
   const prompt = String(req.body?.prompt || "").trim();
   if (!prompt) return res.status(400).json({ error: "Write a message for Gisty AI first." });
   if (prompt.length > 2000) return res.status(400).json({ error: "Keep your message under 2,000 characters." });
+  const messages = Array.isArray(req.body?.messages) ? req.body.messages.slice(-18).map(item => ({ role: item?.role === "assistant" ? "assistant" : "user", content: String(item?.content || "").slice(0, 2000) })).filter(item => item.content.trim()) : [{ role: "user", content: prompt }];
+  while (messages.length && messages[0].role !== "user") messages.shift();
 
   const geminiKey = process.env.GEMINI_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
@@ -462,7 +476,7 @@ app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: GISTY_SYSTEM_PROMPT }] },
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          contents: messages.map(item => ({ role: item.role === "assistant" ? "model" : "user", parts: [{ text: item.content }] })),
           generationConfig: { maxOutputTokens: 600, temperature: 0.7 }
         })
       });
@@ -481,7 +495,7 @@ app.post("/api/ai/chat", authenticate, aiLimiter, async (req, res) => {
           model: process.env.OPENAI_MODEL || "gpt-4o-mini",
           messages: [
             { role: "system", content: GISTY_SYSTEM_PROMPT },
-            { role: "user", content: prompt }
+            ...messages.map(item => ({ role: item.role, content: item.content }))
           ],
           max_tokens: 600,
           temperature: 0.7
@@ -1163,6 +1177,7 @@ async function start() {
       await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(30)");
       await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS bio VARCHAR(160) NOT NULL DEFAULT ''");
       await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_url TEXT");
       await pool.query(`
         UPDATE users
         SET username = left(COALESCE(NULLIF(lower(regexp_replace(split_part(email, '@', 1), '[^a-z0-9_]', '', 'g')), ''), 'member'), greatest(1, 30 - length(id::text))) || id::text
@@ -1185,6 +1200,7 @@ async function start() {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `);
+      await pool.query("ALTER TABLE posts ADD COLUMN IF NOT EXISTS image_url TEXT");
       await pool.query("CREATE INDEX IF NOT EXISTS posts_created_at_idx ON posts (created_at DESC, id DESC)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS user_follows (
