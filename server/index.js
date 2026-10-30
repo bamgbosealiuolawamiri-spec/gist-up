@@ -7,6 +7,7 @@ import jwt from "jsonwebtoken";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import nodemailer from "nodemailer";
 
 const { Pool } = pg;
 const app = express();
@@ -137,6 +138,44 @@ async function authenticate(req, res, next) {
     return res.status(401).json({ error: "Your session expired. Please log in again." });
   }
 }
+
+function createMailTransport() {
+  const host = process.env.SMTP_HOST;
+  const port = Number(process.env.SMTP_PORT || 465);
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  if (!host || !user || !pass) return null;
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure: String(process.env.SMTP_SECURE || "true").toLowerCase() === "true",
+    auth: { user, pass }
+  });
+}
+
+const mailTransport = createMailTransport();
+
+app.post("/api/admin/email-test", authenticate, authLimiter, async (req, res) => {
+  const adminEmail = String(process.env.GISTUP_ADMIN_EMAIL || "").trim().toLowerCase();
+  if (!adminEmail || req.user.email.toLowerCase() !== adminEmail) {
+    return res.status(403).json({ error: "Administrator access is required." });
+  }
+  if (!mailTransport) {
+    return res.status(503).json({ error: "Email is not configured. Check the SMTP settings in the hosting dashboard." });
+  }
+  try {
+    await mailTransport.sendMail({
+      from: process.env.GISTUP_FROM_EMAIL || process.env.SMTP_USER,
+      to: adminEmail,
+      subject: "Gist-Up email setup test",
+      text: "Your Gist-Up email connection is working. This is a private test message sent to the administrator inbox."
+    });
+    return res.json({ ok: true, message: "A test email was sent to the administrator inbox." });
+  } catch (error) {
+    console.error("Admin email test failed:", error?.message || "unknown error");
+    return res.status(502).json({ error: "Gist-Up could not send the test email. Check the SMTP credentials and try again." });
+  }
+});
 
 app.get("/api/health", async (_req, res) => {
   let database = "not configured";
