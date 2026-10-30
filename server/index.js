@@ -553,40 +553,36 @@ app.post("/api/ai/image", authenticate, imageLimiter, async (req, res) => {
   if (!prompt) return res.status(400).json({ error: "Describe the picture you want Gisty AI to create." });
   if (prompt.length > 1200) return res.status(400).json({ error: "Keep image descriptions under 1,200 characters." });
 
-  // Gisty uses the existing OpenRouter key; image generation is a separate paid API capability.
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  const model = process.env.OPENROUTER_IMAGE_MODEL || "bytedance-seed/seedream-4.5";
-  if (!apiKey) return res.status(503).json({ error: "Image generation is not connected yet. Add OPENROUTER_API_KEY to the backend environment." });
+  // Image generation runs through a private Cloudflare Worker. OpenRouter remains the text-chat provider.
+  const workerUrl = process.env.GISTY_IMAGE_WORKER_URL;
+  const workerSecret = process.env.GISTY_IMAGE_WORKER_SECRET;
+  const model = "@cf/black-forest-labs/flux-2-klein-4b";
+  if (!workerUrl || !workerSecret) return res.status(503).json({ error: "Gisty image generation is not configured yet. Please try again later." });
 
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/images", {
+    const response = await fetch(workerUrl, {
       method: "POST",
       headers: {
-        "Authorization": "Bearer " + apiKey,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://gist-up.onrender.com",
-        "X-Title": "Gist Up - Gisty AI Image Studio"
+        "Authorization": "Bearer " + workerSecret,
+        "Content-Type": "application/json"
       },
-      body: JSON.stringify({ model, prompt, aspect_ratio: "1:1", resolution: "1K", n: 1 })
+      body: JSON.stringify({ prompt })
     });
-    const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const providerMessage = data?.error?.message || data?.message || "provider_error";
-      console.error("OpenRouter image request failed:", response.status, providerMessage);
-      if (response.status === 402) return res.status(402).json({ error: "Image generation needs available OpenRouter credits. Check the account balance before trying again." });
+      const providerMessage = await response.text().catch(() => "");
+      console.error("Cloudflare image request failed:", response.status, providerMessage.slice(0, 300));
+      if (response.status === 401) return res.status(502).json({ error: "Gisty image service authentication needs attention. Please try again later." });
       if (response.status === 429) return res.status(429).json({ error: "Image generation is temporarily rate-limited. Please wait a little and try again." });
-      return res.status(502).json({ error: "The image provider could not create this picture. Check the selected image model and try again." });
+      return res.status(502).json({ error: "Gisty couldn't create this picture right now. Please try again shortly." });
     }
-    const item = data?.data?.[0];
-    const encoded = item?.b64_json;
-    const remoteUrl = item?.url;
-    const mediaType = item?.media_type || "image/png";
-    if (encoded) return res.json({ imageUrl: "data:" + mediaType + ";base64," + encoded, model, cost: data?.usage?.cost ?? null });
-    if (remoteUrl) return res.json({ imageUrl: remoteUrl, model, cost: data?.usage?.cost ?? null });
-    return res.status(502).json({ error: "The image provider returned no usable image. Please try again." });
+    const imageBytes = Buffer.from(await response.arrayBuffer());
+    if (!imageBytes.length || !String(response.headers.get("content-type") || "").startsWith("image/")) {
+      return res.status(502).json({ error: "Gisty image service returned an invalid image. Please try again." });
+    }
+    return res.json({ imageUrl: "data:image/png;base64," + imageBytes.toString("base64"), model });
   } catch (error) {
-    console.error("OpenRouter image request failed:", error?.message || "unknown error");
-    return res.status(502).json({ error: "Gisty AI couldn't connect to the image provider. Please try again shortly." });
+    console.error("Cloudflare image request failed:", error?.message || "unknown error");
+    return res.status(502).json({ error: "Gisty AI couldn't connect to the image service. Please try again shortly." });
   }
 });
 
