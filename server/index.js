@@ -766,6 +766,7 @@ app.get("/api/likes/me", authenticate, async (req, res) => {
 
 app.get("/api/comments/me", authenticate, async (req, res) => {
   try {
+    if (!includeArchived) await pool.query(`INSERT INTO conversations (user_a_id,user_b_id) SELECT LEAST(f.follower_id,f.followed_id),GREATEST(f.follower_id,f.followed_id) FROM user_follows f WHERE f.follower_id=$1 AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_id=f.follower_id AND b.blocked_id=f.followed_id) OR (b.blocker_id=f.followed_id AND b.blocked_id=f.follower_id)) ON CONFLICT (user_a_id,user_b_id) DO NOTHING`,[req.user.id]);
     const result = await pool.query(
       `SELECT c.id, c.content, c.created_at, p.id AS post_id, p.content AS post_content,
               u.full_name AS post_author_name, u.username AS post_author_username
@@ -1019,6 +1020,8 @@ app.post("/api/users/:id/follow", authenticate, async (req, res) => {
       following = false;
     } else {
       await pool.query("INSERT INTO user_follows (follower_id, followed_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [req.user.id, targetId]);
+      const blocked = await pool.query("SELECT 1 FROM user_blocks WHERE (blocker_id=$1 AND blocked_id=$2) OR (blocker_id=$2 AND blocked_id=$1) LIMIT 1", [req.user.id,targetId]);
+      if (!blocked.rowCount) { const a=BigInt(req.user.id)<BigInt(targetId)?req.user.id:targetId; const b=BigInt(req.user.id)<BigInt(targetId)?targetId:req.user.id; await pool.query("INSERT INTO conversations (user_a_id,user_b_id) VALUES ($1,$2) ON CONFLICT (user_a_id,user_b_id) DO NOTHING",[String(a),String(b)]); }
       following = true;
       await pool.query(
         "INSERT INTO notifications (recipient_id, actor_id, type) SELECT $1, $2, 'follow' WHERE COALESCE((SELECT (preferences->>'notificationsFollowers')::boolean FROM user_settings WHERE user_id = $1), TRUE)",
