@@ -80,3 +80,11 @@
 .mini-avatars i:nth-child(1){background:linear-gradient(135deg,#8B5CF6,#C4B5FD);}
 .mini-avatars i:nth-child(2){background:linear-gradient(135deg,#34D399,#A7F3D0);}
 .mini-avatars i:nth-child(3){background:linear-gradient(135deg,#FB923C,#FED7AA);}
+
+/* Direct-message emoji picker */
+.chat-emoji-wrap{position:relative;flex:0 0 auto}
+.chat-emoji-picker{position:absolute;left:0;bottom:48px;z-index:20;display:grid;grid-template-columns:repeat(7,36px);gap:3px;padding:9px;background:#fff;border:1px solid #e8e1fa;border-radius:14px;box-shadow:0 10px 32px rgba(40,20,80,.16);max-width:min(290px,80vw)}
+.chat-emoji-picker button{width:36px;height:36px;border:0;border-radius:8px;background:transparent;font-size:21px;cursor:pointer}
+.chat-emoji-picker button:hover{background:#f1ecff}
+.chat-compose{display:flex;align-items:center;gap:8px}
+.chat-compose>input{flex:1;min-width:0}
