@@ -1122,6 +1122,22 @@ app.post("/api/communities/:id/join", authenticate, async (req, res) => {
 app.get("/api/conversations", authenticate, async (req, res) => {
   const includeArchived = String(req.query.archived || "false") === "true";
   try {
+    // Backfill conversation records for existing follow connections so both
+    // accounts can open the same chat, including follows created before messaging shipped.
+    await pool.query(
+      `INSERT INTO conversations (user_a_id, user_b_id)
+       SELECT LEAST(f.follower_id, f.followed_id), GREATEST(f.follower_id, f.followed_id)
+       FROM user_follows f
+       WHERE (f.follower_id = $1 OR f.followed_id = $1)
+         AND f.follower_id <> f.followed_id
+         AND NOT EXISTS (
+           SELECT 1 FROM user_blocks b
+           WHERE (b.blocker_id = f.follower_id AND b.blocked_id = f.followed_id)
+              OR (b.blocker_id = f.followed_id AND b.blocked_id = f.follower_id)
+         )
+       ON CONFLICT (user_a_id, user_b_id) DO NOTHING`,
+      [req.user.id]
+    );
     const result = await pool.query(
       `SELECT c.id,
               CASE WHEN c.user_a_id = $1 THEN ub.id ELSE ua.id END AS other_user_id,
