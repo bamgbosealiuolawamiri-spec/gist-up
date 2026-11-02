@@ -70,3 +70,13 @@
 
 .assistant-status-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 @media(max-width:560px){.assistant-status-row{align-items:flex-start;flex-wrap:wrap}.assistant-status-actions{width:100%;margin-left:24px}}
+
+
+/* Landing page: keep the preview link distinct from account actions. */
+.preview-entry{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;margin:15px 0 2px;padding:10px 12px;border:1px solid #E8E1FA;border-radius:10px;background:#FAF8FF;color:var(--purple);font-size:11px;font-weight:700;text-decoration:none;}
+.preview-entry:hover{background:#F1ECFF;border-color:#D8CAFF;}
+.auth-form-wrap>small{margin-top:16px;}
+.mini-avatars i{font-size:0;}
+.mini-avatars i:nth-child(1){background:linear-gradient(135deg,#8B5CF6,#C4B5FD);}
+.mini-avatars i:nth-child(2){background:linear-gradient(135deg,#34D399,#A7F3D0);}
+.mini-avatars i:nth-child(3){background:linear-gradient(135deg,#FB923C,#FED7AA);}
