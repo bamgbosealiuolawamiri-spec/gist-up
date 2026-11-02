@@ -986,20 +986,18 @@ function App() {
     const formatTime = value => value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
     return <div className="messages-layout">
       <section className="message-list-panel">
-        <div className="message-list-head"><h2>Chats</h2><button className={"icon-button "+(showNewMessage?"tab-active":"")} aria-label="New message" onClick={() => { setShowNewMessage(old => !old); setMessageSearch(""); }}><Pencil size={17}/></button></div>
-        <div className="search-small"><Search size={16}/><input value={messageSearch} onChange={e => setMessageSearch(e.target.value)} placeholder={showNewMessage ? "Search registered accounts" : "Search conversations"}/></div>
+        <div className="message-list-head"><h2>Chats</h2></div>
+        <div className="search-small"><Search size={16}/><input value={messageSearch} onChange={e => setMessageSearch(e.target.value)} placeholder="Search conversations"/></div>
         <div className="message-filters"><button className={!showArchived?"tab-active":""} onClick={() => { setShowArchived(false); setActiveConversationId(null); }}>All</button><button className={showArchived?"tab-active":""} onClick={() => { setShowArchived(true); setActiveConversationId(null); }}>Archived</button></div>
-        {showNewMessage ? <div className="message-search-results">
-          {messageSearch.trim().length < 2 ? <p className="empty-state">Search by a person's name or username to start a real conversation.</p> : messageUserResults.length ? messageUserResults.map(user => <button className="conversation-row" key={user.id} onClick={() => startConversation(user)}><Avatar initials={initialsFor(user.full_name)}/><span className="conversation-copy"><strong>{user.full_name}</strong><small>@{user.username}</small></span><ArrowRight size={16}/></button>) : <p className="empty-state">No registered accounts found for that search.</p>}
-        </div> : visibleConversations.length ? visibleConversations.map(c => <button className={"conversation-row "+(String(activeConversationId)===String(c.id)?"conversation-active":"")} key={c.id} onClick={() => setActiveConversationId(c.id)}><Avatar initials={initialsFor(c.full_name)}/><span className="conversation-copy"><strong>{c.full_name}</strong><small>{c.last_message || "Start the conversation"}</small></span><span className="conversation-meta"><small>{formatTime(c.last_message_at)}</small></span></button>) : <div className="empty-state">No {showArchived ? "archived " : ""}conversations yet. Use the pencil button to message a registered user.</div>}
+        {visibleConversations.length ? visibleConversations.map(c => <button className={"conversation-row "+(String(activeConversationId)===String(c.id)?"conversation-active":"")} key={c.id} onClick={() => { setActiveConversationId(c.id); loadThread(c.id); }}><Avatar initials={initialsFor(c.full_name)} imageUrl={c.avatar_url}/><span className="conversation-copy"><strong>{c.full_name}</strong><small>{c.last_message || "Start the conversation"}</small></span><span className="conversation-meta"><small>{formatTime(c.last_message_at)}</small></span></button>) : <div className="empty-state">No {showArchived ? "archived " : ""}conversations yet. Follow someone or visit their profile to message them.</div>}
       </section>
       <section className="chat-panel">
         {current ? <>
           <div className="chat-head"><Avatar initials={initialsFor(current.full_name)}/><div><strong>{current.full_name}</strong><span>@{current.username}</span></div><button className="icon-button" aria-label={showArchived?"Restore conversation":"Archive conversation"} onClick={() => toggleConversationArchive(current.id, !showArchived)}><Archive size={18}/></button></div>
           <div className="chat-history"><div className="chat-date">MESSAGES</div>{threadMessages.length ? threadMessages.map(m => <div className={"chat-message "+(String(m.sender_id)===String(authUser?.id)?"mine":"")} key={m.id}><p>{m.content}</p><small>{formatTime(m.created_at)}</small></div>) : <p className="empty-state">This is the beginning of your conversation. Send a message to get started.</p>}</div>
-          {!showArchived && <div className="chat-compose"><input value={messageDraft} onChange={e=>setMessageDraft(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendMessage()} placeholder="Write a message…" maxLength={4000}/><button className="primary-button send-message" onClick={sendMessage} disabled={!messageDraft.trim()||messageBusy}><Send size={16}/></button></div>}
+          {!showArchived && <div className="chat-compose"><button className="icon-button" type="button" aria-label="Add emoji" onClick={() => setMessageDraft(value => value + " 😊")}>😊</button><input value={messageDraft} onChange={e=>setMessageDraft(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendMessage()} placeholder="Write a message…" maxLength={4000}/><button className="primary-button send-message" onClick={sendMessage} disabled={!messageDraft.trim()||messageBusy}><Send size={16}/></button></div>}
           <p className="preview-note chat-note">Messages are saved to your Gist Up account. Both people must have registered accounts.</p>
-        </> : <div className="empty-panel chat-empty"><div className="placeholder-icon"><MessageCircle size={27}/></div><h2>{showArchived?"Your archived chats":"Your conversations"}</h2><p>Select a chat, or use the pencil button to start a conversation with a registered Gist Up user.</p><button className="primary-button" onClick={() => { setShowArchived(false); setShowNewMessage(true); setMessageSearch(""); }}>New message <Pencil size={15}/></button></div>}
+        </> : <div className="empty-panel chat-empty"><div className="placeholder-icon"><MessageCircle size={27}/></div><h2>{showArchived?"Your archived chats":"Your conversations"}</h2><p>Select a chat, or use the pencil button to start a conversation with a registered Gist Up user.</p><button className="primary-button" onClick={() => go("Explore")}>Find people <Users size={15}/></button></div>}
       </section>
     </div>;
   }
@@ -1036,6 +1034,7 @@ function App() {
         <div className="profile-page-body">
           <Avatar initials={profile.initials} size="profile-avatar" imageUrl={profile.avatar_url}/>
           <div className="profile-actions">
+            <button className="outline-button" onClick={() => startConversation({id: profile.id})}><MessageCircle size={15}/> Message</button>
             <button className={profile.isFollowing ? "outline-button" : "primary-button"} onClick={async () => {
               const updated = await toggleFollow(person);
               if (updated) await openUserProfile(person);
