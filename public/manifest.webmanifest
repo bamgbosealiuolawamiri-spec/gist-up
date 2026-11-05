@@ -1,0 +1,21 @@
+{
+  "id": "/",
+  "name": "Gist Up — Your People. Your Stories.",
+  "short_name": "Gist Up",
+  "description": "Share your story, discover new perspectives, and connect with your people.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F7F7FB",
+  "theme_color": "#6C3BFF",
+  "categories": ["social", "lifestyle"],
+  "icons": [
+    {
+      "src": "/gist-up-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
