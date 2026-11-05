@@ -118,3 +118,9 @@
   }
   .mobile-nav-create svg{flex-shrink:0}
 }
+
+
+/* Clearer first-time post composer guidance */
+.composer-hint{margin:14px 0 8px;color:var(--muted);font-size:12px;line-height:1.55}
+.composer-modal>textarea[aria-label="Write your post"]{display:block;width:100%;min-height:150px;resize:vertical;border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff;color:var(--navy);font:inherit;font-size:14px;line-height:1.6;outline:none}
+.composer-modal>textarea[aria-label="Write your post"]:focus{border-color:#A58BFF;box-shadow:0 0 0 3px #6C3BFF12}
