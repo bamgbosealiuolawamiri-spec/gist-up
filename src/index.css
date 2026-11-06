@@ -124,3 +124,23 @@
 .composer-hint{margin:14px 0 8px;color:var(--muted);font-size:12px;line-height:1.55}
 .composer-modal>textarea[aria-label="Write your post"]{display:block;width:100%;min-height:150px;resize:vertical;border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff;color:var(--navy);font:inherit;font-size:14px;line-height:1.6;outline:none}
 .composer-modal>textarea[aria-label="Write your post"]:focus{border-color:#A58BFF;box-shadow:0 0 0 3px #6C3BFF12}
+
+/* Verification application and review */
+.verification-panel,.verification-review{display:grid;gap:16px}
+.verification-intro{padding:22px;border:1px solid #E9E3FF;border-radius:18px;background:linear-gradient(135deg,#F8F5FF,#fff)}
+.verification-intro h3{font-size:21px;margin:12px 0 7px;color:var(--navy)}
+.verification-intro p,.verification-application-card p{color:var(--muted);line-height:1.65;font-size:13px}
+.verification-safety-note{display:flex;gap:10px;align-items:flex-start;padding:13px;border-radius:12px;background:#F5F2FF;color:#5B45A3;font-size:12px;line-height:1.6}
+.verification-application-card{display:grid;gap:12px}
+.verification-application-card .section-title{align-items:flex-start}
+.verification-application-card .section-title h3{margin:0 0 4px}
+.verification-application-card .section-title span:not(.welcome-pill){font-size:12px;color:var(--muted)}
+.verification-application-card a{display:inline-flex;align-items:center;gap:6px;color:var(--purple);font-size:13px;text-decoration:none;font-weight:650}
+.verification-application-card small{font-size:11px;color:var(--muted)}
+.verification-actions{display:flex;gap:9px;flex-wrap:wrap}
+.verification-status{font-size:9px}
+.verification-status.approved{background:#E8F8EF;color:#18764C}
+.verification-status.rejected{background:#FFF0F0;color:#B42318}
+.verified-badge{display:inline-flex;vertical-align:middle;color:#287BEA;margin-left:3px}
+.verified-badge svg{fill:#287BEA;stroke:#fff;stroke-width:2.4}
+@media(max-width:640px){.verification-intro{padding:17px}.verification-application-card .section-title{gap:8px;flex-direction:column}}
