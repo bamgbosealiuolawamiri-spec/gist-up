@@ -1,4 +1,4 @@
-const CACHE_NAME = "gist-up-shell-v1";
+const CACHE_NAME = "gist-up-shell-v2";
 const APP_SHELL = ["/", "/index.html", "/gist-up-mark.svg"];
 
 self.addEventListener("install", (event) => {
