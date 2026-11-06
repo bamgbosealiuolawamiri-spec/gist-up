@@ -365,6 +365,105 @@ app.patch("/api/profile/me", authenticate, async (req, res) => {
   }
 });
 
+
+const verificationAdminEmail = String(process.env.GISTUP_ADMIN_EMAIL || "gistup.admin@gmail.com").trim().toLowerCase();
+function isVerificationAdmin(req) { return String(req.user?.email || "").toLowerCase() === verificationAdminEmail; }
+
+app.get("/api/verification/me", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, status, reason, public_links, reviewer_note, created_at, reviewed_at FROM verification_applications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
+      [req.user.id]
+    );
+    res.json({ application: result.rows[0] || null });
+  } catch (error) {
+    console.error("Verification status fetch failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "We couldn't load your verification status right now." });
+  }
+});
+
+app.post("/api/verification/applications", authenticate, authLimiter, async (req, res) => {
+  const reason = String(req.body?.reason || "").trim();
+  const publicLinks = String(req.body?.publicLinks || "").trim();
+  if (reason.length < 40 || reason.length > 1000) return res.status(400).json({ error: "Please explain why your account should be verified (40–1,000 characters)." });
+  if (publicLinks.length > 1000) return res.status(400).json({ error: "Public links must be 1,000 characters or fewer." });
+  if (publicLinks && !/^https:\/\//i.test(publicLinks)) return res.status(400).json({ error: "Use a public profile or website link beginning with https://." });
+  try {
+    const existing = await pool.query(
+      "SELECT id, status FROM verification_applications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
+      [req.user.id]
+    );
+    if (existing.rows[0]?.status === "pending") return res.status(409).json({ error: "Your application is already waiting for review." });
+    if (existing.rows[0]?.status === "approved") return res.status(409).json({ error: "Your account is already verified." });
+    const result = await pool.query(
+      "INSERT INTO verification_applications (user_id, reason, public_links) VALUES ($1, $2, $3) RETURNING id, status, reason, public_links, created_at",
+      [req.user.id, reason, publicLinks]
+    );
+    if (mailTransport) {
+      try {
+        await mailTransport.sendMail({
+          from: process.env.GISTUP_FROM_EMAIL || process.env.SMTP_USER,
+          to: verificationAdminEmail,
+          subject: "New Gist-Up verification application",
+          text: "A new verification application is ready for review. Sign in to Gist-Up with the administrator account and open Settings & Privacy > Verification review."
+        });
+      } catch (mailError) { console.error("Verification admin email failed:", mailError?.message || "unknown error"); }
+    }
+    res.status(201).json({ application: result.rows[0], message: "Your application has been submitted for review." });
+  } catch (error) {
+    console.error("Verification application failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "We couldn't submit your application right now. Please try again." });
+  }
+});
+
+app.get("/api/admin/verification", authenticate, async (req, res) => {
+  if (!isVerificationAdmin(req)) return res.status(403).json({ error: "Administrator access is required." });
+  try {
+    const result = await pool.query(
+      `SELECT v.id, v.status, v.reason, v.public_links, v.created_at, u.full_name, u.email, u.username
+       FROM verification_applications v JOIN users u ON u.id = v.user_id
+       ORDER BY CASE WHEN v.status = 'pending' THEN 0 ELSE 1 END, v.created_at ASC LIMIT 100`
+    );
+    res.json({ applications: result.rows });
+  } catch (error) {
+    console.error("Verification queue fetch failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "We couldn't load the review queue." });
+  }
+});
+
+app.patch("/api/admin/verification/:id", authenticate, async (req, res) => {
+  if (!isVerificationAdmin(req)) return res.status(403).json({ error: "Administrator access is required." });
+  const status = String(req.body?.status || "");
+  const reviewerNote = String(req.body?.reviewerNote || "").trim().slice(0, 500);
+  if (!["approved", "rejected"].includes(status)) return res.status(400).json({ error: "Choose approve or reject." });
+  try {
+    const result = await pool.query(
+      `UPDATE verification_applications SET status = $1, reviewer_note = $2, reviewed_at = NOW()
+       WHERE id = $3 AND status = 'pending'
+       RETURNING id, user_id, status`,
+      [status, reviewerNote, req.params.id]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "This application is no longer pending." });
+    if (mailTransport) {
+      try {
+        const applicant = await pool.query("SELECT email, full_name FROM users WHERE id = $1", [result.rows[0].user_id]);
+        if (applicant.rowCount) await mailTransport.sendMail({
+          from: process.env.GISTUP_FROM_EMAIL || process.env.SMTP_USER,
+          to: applicant.rows[0].email,
+          subject: status === "approved" ? "Your Gist-Up verification was approved" : "An update on your Gist-Up verification",
+          text: status === "approved"
+            ? "Your Gist-Up verification application has been approved. Your verified badge will appear on your account."
+            : "Your Gist-Up verification application was not approved this time." + (reviewerNote ? "\\nReview note: " + reviewerNote : "")
+        });
+      } catch (mailError) { console.error("Verification decision email failed:", mailError?.message || "unknown error"); }
+    }
+    res.json({ ok: true, status });
+  } catch (error) {
+    console.error("Verification review failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "We couldn't save this review decision." });
+  }
+});
+
 app.get("/api/posts", authenticate, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -1310,6 +1409,23 @@ async function start() {
         WHERE username IS NULL OR username = ''
       `);
       await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users (username)");
+
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT FALSE");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS verification_applications (
+          id BIGSERIAL PRIMARY KEY,
+          user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          reason VARCHAR(1000) NOT NULL,
+          public_links VARCHAR(1000) NOT NULL DEFAULT '',
+          status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+          reviewer_note VARCHAR(500) NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          reviewed_at TIMESTAMPTZ
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS verification_applications_status_created_idx ON verification_applications (status, created_at ASC)");
+      await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS verification_applications_one_pending_per_user ON verification_applications (user_id) WHERE status = 'pending'");
+
       await pool.query(`
         CREATE TABLE IF NOT EXISTS user_settings (
           user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
