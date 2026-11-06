@@ -84,6 +84,7 @@ function publicUser(row) {
     bio: row.bio || "",
     avatar_url: row.avatar_url || null,
     cover_url: row.cover_url || null,
+    is_verified: row.is_verified === true,
     created_at: row.created_at
   };
 }
@@ -127,7 +128,7 @@ async function authenticate(req, res, next) {
   try {
     const payload = jwt.verify(token, JWT_SECRET, { issuer: "gist-up" });
     const result = await pool.query(
-      "SELECT id, email, full_name, username, bio, avatar_url, cover_url, created_at FROM users WHERE id = $1 LIMIT 1",
+      "SELECT id, email, full_name, username, bio, avatar_url, cover_url, is_verified, created_at FROM users WHERE id = $1 LIMIT 1",
       [payload.sub]
     );
     if (!result.rowCount) return res.status(401).json({ error: "Your session is no longer valid. Please log in again." });
@@ -444,6 +445,7 @@ app.patch("/api/admin/verification/:id", authenticate, async (req, res) => {
       [status, reviewerNote, req.params.id]
     );
     if (!result.rowCount) return res.status(404).json({ error: "This application is no longer pending." });
+    await pool.query("UPDATE users SET is_verified = $1 WHERE id = $2", [status === "approved", result.rows[0].user_id]);
     if (mailTransport) {
       try {
         const applicant = await pool.query("SELECT email, full_name FROM users WHERE id = $1", [result.rows[0].user_id]);
