@@ -95,6 +95,62 @@ function App() {
   const [assistantStatus, setAssistantStatus] = useState("unknown");
   const [assistantModel, setAssistantModel] = useState("");
   const [authUser, setAuthUser] = useState(null);
+
+  const [verificationApplication, setVerificationApplication] = useState(null);
+  const [verificationReason, setVerificationReason] = useState("");
+  const [verificationLink, setVerificationLink] = useState("");
+  const [verificationBusy, setVerificationBusy] = useState(false);
+  const [verificationQueue, setVerificationQueue] = useState([]);
+  const [verificationQueueBusy, setVerificationQueueBusy] = useState(false);
+  const isVerificationAdmin = String(authUser?.email || "").toLowerCase() === "gistup.admin@gmail.com";
+  useEffect(() => {
+    if (!authUser?.id) { setVerificationApplication(null); setVerificationQueue([]); return; }
+    fetch(API_BASE + "/api/verification/me", { credentials: "include" })
+      .then(response => response.ok ? response.json() : null)
+      .then(data => setVerificationApplication(data?.application || null))
+      .catch(() => {});
+  }, [authUser?.id]);
+  useEffect(() => {
+    if (settingsTab !== "Verification review" || !isVerificationAdmin) return;
+    setVerificationQueueBusy(true);
+    fetch(API_BASE + "/api/admin/verification", { credentials: "include" })
+      .then(async response => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Couldn't load the review queue.");
+        setVerificationQueue(data.applications || []);
+      })
+      .catch(error => notify(error.message))
+      .finally(() => setVerificationQueueBusy(false));
+  }, [settingsTab, isVerificationAdmin]);
+  async function submitVerificationApplication() {
+    setVerificationBusy(true);
+    try {
+      const response = await fetch(API_BASE + "/api/verification/applications", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: verificationReason, publicLinks: verificationLink })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Couldn't submit your application.");
+      setVerificationApplication(data.application);
+      setVerificationReason(""); setVerificationLink("");
+      notify("Your verification application has been submitted.");
+    } catch (error) { notify(error.message || "Couldn't submit your application."); }
+    finally { setVerificationBusy(false); }
+  }
+  async function reviewVerificationApplication(id, status) {
+    const reviewerNote = status === "rejected" ? window.prompt("Optional note for the applicant (keep it respectful):") || "" : "";
+    try {
+      const response = await fetch(API_BASE + "/api/admin/verification/" + encodeURIComponent(id), {
+        method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, reviewerNote })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Couldn't save this decision.");
+      setVerificationQueue(items => items.map(item => String(item.id) === String(id) ? { ...item, status } : item));
+      notify(status === "approved" ? "Application approved." : "Application rejected.");
+    } catch (error) { notify(error.message || "Couldn't save this decision."); }
+  }
+
   useEffect(() => {
     if (!authUser?.id) { setAssistantMessages([]); return; }
     try { const savedChat = JSON.parse(localStorage.getItem("gistup:gisty-chat:" + authUser.id) || "[]"); setAssistantMessages(Array.isArray(savedChat) ? savedChat.slice(-40) : []); }
@@ -1102,14 +1158,35 @@ function App() {
     </div>;
   }
   function SettingsPage() {
-    const tabs=["Account","Privacy","Notifications","Appearance","Blocked accounts","Data & account"];
+    const tabs=["Account","Verification","Privacy","Notifications","Appearance","Blocked accounts","Data & account", ...(isVerificationAdmin ? ["Verification review"] : [])];
     const notificationOptions=[
       ["notificationsFollowers","New followers","When someone follows your account."],
       ["notificationsEngagement","Likes and comments","When people engage with your posts."],
       ["notificationsMessages","Messages","When someone sends you a message."],
       ["notificationsCommunities","Community activity","Updates from communities you join."]
     ];
-    return <div className="settings-layout"><section className="settings-menu">{tabs.map(t=><button key={t} className={settingsTab===t?"settings-selected":""} onClick={()=>setSettingsTab(t)}>{t==="Account"?<UserRound size={17}/>:t==="Privacy"?<Shield size={17}/>:t==="Notifications"?<Bell size={17}/>:t==="Appearance"?<Moon size={17}/>:t==="Blocked accounts"?<Ban size={17}/>:<Lock size={17}/>} {t}<ChevronRight size={15}/></button>)}</section><section className="settings-content"><h2>{settingsTab}</h2><p className="muted">Manage your real account preferences. Changes are saved to your account.</p>
+    return <div className="settings-layout"><section className="settings-menu">{tabs.map(t=><button key={t} className={settingsTab===t?"settings-selected":""} onClick={()=>setSettingsTab(t)}>{t==="Account"?<UserRound size={17}/>:t==="Privacy"?<Shield size={17}/>:t==="Notifications"?<Bell size={17}/>:t==="Appearance"?<Moon size={17}/>:t==="Blocked accounts"?<Ban size={17}/>:t==="Verification"||t==="Verification review"?<ShieldCheck size={17}/>:<Lock size={17}/>} {t}<ChevronRight size={15}/></button>)}</section><section className="settings-content"><h2>{settingsTab}</h2><p className="muted">Manage your real account preferences. Changes are saved to your account.</p>
+
+      {settingsTab==="Verification"&&<div className="verification-panel">
+        <div className="verification-intro"><span className="welcome-pill"><ShieldCheck size={14}/> ACCOUNT AUTHENTICITY</span><h3>Request a verified badge</h3><p>Verification helps people recognise authentic accounts. Applications are reviewed by the Gist-Up team; submitting a request does not guarantee approval.</p></div>
+        {verificationApplication?.status==="approved" ? <div className="empty-state-box"><ShieldCheck size={28}/><strong>Your account is verified</strong><p>Your verification application was approved.</p></div>
+        : verificationApplication?.status==="pending" ? <div className="empty-state-box"><Clock size={26}/><strong>Application under review</strong><p>Your request was submitted on {new Date(verificationApplication.created_at).toLocaleDateString()}. We'll update this page when a decision is made.</p></div>
+        : <><div className="verification-safety-note"><Shield size={17}/><span>For your privacy, do not upload or send identity documents, passwords, sign-in codes, or private information. Share only public links that help confirm your account is authentic.</span></div>
+          <label className="auth-label">Why should this account be verified?<textarea value={verificationReason} onChange={e=>setVerificationReason(e.target.value)} maxLength={1000} placeholder="Tell us what makes this account notable or how people can confirm it belongs to you." rows={5}/></label>
+          <label className="auth-label">Public profile or website link (optional)<input type="url" value={verificationLink} onChange={e=>setVerificationLink(e.target.value)} placeholder="https://example.com/your-public-profile"/></label>
+          <button className="primary-button auth-main-btn" disabled={verificationBusy||verificationReason.trim().length<40} onClick={submitVerificationApplication}>{verificationBusy?"Submitting…":"Submit verification request"} <ArrowRight size={16}/></button>
+          <p className="preview-note">Free to apply. Gist-Up does not sell verification badges. You can apply again if a previous request was declined.</p>
+        </>}
+      </div>}
+      {settingsTab==="Verification review"&&isVerificationAdmin&&<div className="verification-review">
+        <p className="muted">Review requests carefully. Check only public information and never ask applicants to send passwords or private identity documents.</p>
+        {verificationQueueBusy?<p className="muted">Loading applications…</p>:verificationQueue.length?verificationQueue.map(item=><article className="content-panel verification-application-card" key={item.id}>
+          <div className="section-title"><div><h3>{item.full_name}</h3><span>@{item.username} · {item.email}</span></div><span className={"welcome-pill verification-status "+item.status}>{item.status.toUpperCase()}</span></div>
+          <p>{item.reason}</p>{item.public_links&&<a href={item.public_links} target="_blank" rel="noreferrer">Open public profile link <ArrowUpRight size={14}/></a>}
+          <small>Submitted {new Date(item.created_at).toLocaleString()}</small>
+          {item.status==="pending"&&<div className="verification-actions"><button className="primary-button" onClick={()=>reviewVerificationApplication(item.id,"approved")}><Check size={15}/> Approve</button><button className="outline-button" onClick={()=>reviewVerificationApplication(item.id,"rejected")}>Reject</button></div>}
+        </article>):<div className="empty-state-box"><ShieldCheck size={26}/><strong>No verification applications yet</strong><p>New requests will appear here.</p></div>}
+      </div>}
       {settingsTab==="Account"&&<><div className="setting-row"><div><strong>Profile information</strong><span>Change your name, handle and bio.</span></div><button className="outline-button compact" onClick={()=>setEditProfile(true)}>Edit profile</button></div><div className="setting-row"><div><strong>Email address</strong><span>{authUser?.email||email||"Your signed-in email"}</span></div><span>Account email</span></div><div className="setting-row"><div><strong>Password & security</strong><span>Change your password using your current password.</span></div><button className="outline-button compact" onClick={()=>setShowPasswordForm(value=>!value)}>{showPasswordForm?"Cancel":"Change password"}</button></div>{showPasswordForm&&<div className="content-panel"><label className="auth-label">Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)}/></label><label className="auth-label">New password<input type="password" autoComplete="new-password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} minLength={8}/></label><label className="auth-label">Confirm new password<input type="password" autoComplete="new-password" value={confirmNewPassword} onChange={e=>setConfirmNewPassword(e.target.value)}/></label><button className="primary-button" disabled={passwordBusy||!currentPassword||newPassword.length<8||!confirmNewPassword} onClick={updatePassword}>{passwordBusy?"Updating…":"Update password"} <Lock size={15}/></button></div>}</>}
       {settingsTab==="Privacy"&&<><div className="setting-row"><div><strong>Blocked accounts</strong><span>Review or unblock accounts you've blocked. Blocking already filters their posts from your feed.</span></div><button className="outline-button compact" onClick={()=>setSettingsTab("Blocked accounts")}>Manage</button></div><div className="setting-row"><div><strong>Profile visibility</strong><span>Your profile and posts are currently visible to signed-in members. Private-profile approval controls are not enabled yet.</span></div><Shield size={18}/></div><div className="setting-row"><div><strong>Direct messages</strong><span>Only start conversations with people you intend to contact. Message-request controls are not enabled yet.</span></div><MessageCircle size={18}/></div><div className="setting-row"><div><strong>Account sessions</strong><span>Sign out to clear this browser's Gist Up session.</span></div><button className="outline-button compact" onClick={async()=>{try{await fetch(API_BASE+"/api/auth/logout",{method:"POST",credentials:"include"});}finally{setAuthUser(null);setAuthMode("welcome");notify("You have been signed out.");}}}>Sign out</button></div></>}
       {settingsTab==="Notifications"&&<>{notificationOptions.map(([key,title,desc])=><div className="setting-row" key={key}><div><strong>{title}</strong><span>{desc}</span></div><button className={"toggle "+(settings[key]?"toggle-on":"")} disabled={settingsBusy} aria-label={title+" notifications"} aria-pressed={settings[key]===true} onClick={()=>updateSetting(key,!(settings[key]===true))}><i/></button></div>)}<p className="preview-note">These preferences are saved to your account. Delivery controls will be applied to notification delivery as those channels are added.</p></>}
