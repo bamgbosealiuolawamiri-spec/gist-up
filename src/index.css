@@ -144,3 +144,5 @@
 .verified-badge{display:inline-flex;vertical-align:middle;color:#287BEA;margin-left:3px}
 .verified-badge svg{fill:#287BEA;stroke:#fff;stroke-width:2.4}
 @media(max-width:640px){.verification-intro{padding:17px}.verification-application-card .section-title{gap:8px;flex-direction:column}}
+
+.post-video,.post-video-preview{display:block;width:100%;max-height:620px;background:#111;border-radius:16px;margin:12px 0 16px;object-fit:contain}.post-video-preview{max-height:360px;margin:0;border-radius:14px}
