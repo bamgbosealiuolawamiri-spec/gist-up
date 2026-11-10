@@ -469,7 +469,7 @@ app.patch("/api/admin/verification/:id", authenticate, async (req, res) => {
 app.get("/api/posts", authenticate, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT p.id, p.content, p.image_url, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url,
+      SELECT p.id, p.content, p.image_url, p.video_url, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url,
              (SELECT COUNT(*)::int FROM post_likes pl WHERE pl.post_id = p.id) AS likes,
              (SELECT COUNT(*)::int FROM post_comments pc WHERE pc.post_id = p.id) AS comments,
              (SELECT COUNT(*)::int FROM post_reposts pr WHERE pr.post_id = p.id) AS reposts,
@@ -492,6 +492,7 @@ app.get("/api/posts", authenticate, async (req, res) => {
       id: row.id,
       text: String(row.content || "").trim(),
       image_url: row.image_url || null,
+      video_url: row.video_url || null,
       avatar_url: row.avatar_url || null,
       name: row.full_name,
       handle: "@" + row.username,
@@ -515,21 +516,25 @@ app.get("/api/posts", authenticate, async (req, res) => {
 app.post("/api/posts", authenticate, async (req, res) => {
   const content = String(req.body?.content || "").trim();
   const imageUrl = req.body?.imageUrl == null ? null : String(req.body.imageUrl);
-  if (!content && !imageUrl) return res.status(400).json({ error: "Write something or add a photo before publishing." });
+  const videoUrl = req.body?.videoUrl == null ? null : String(req.body.videoUrl);
+  if (!content && !imageUrl && !videoUrl) return res.status(400).json({ error: "Write something or add a photo or video before publishing." });
+  if (imageUrl && videoUrl) return res.status(400).json({ error: "Add either a photo or a video to each post, not both." });
   if (content.length > 5000) return res.status(400).json({ error: "Posts must be 5,000 characters or fewer." });
   if (imageUrl && (!/^data:image\/(jpeg|png|webp);base64,/.test(imageUrl) || imageUrl.length > 1000000)) return res.status(400).json({ error: "Images must be JPG, PNG or WebP and smaller than 1 MB after resizing." });
+  if (videoUrl && (!/^data:video\/(mp4|webm);base64,/.test(videoUrl) || videoUrl.length > 7 * 1024 * 1024)) return res.status(400).json({ error: "Videos must be MP4 or WebM and smaller than 5 MB." });
   try {
     const result = await pool.query(
-      `INSERT INTO posts (user_id, content, image_url)
-       VALUES ($1, $2, $3)
-       RETURNING id, content, image_url, created_at`,
-      [req.user.id, content || (imageUrl ? " " : ""), imageUrl]
+      `INSERT INTO posts (user_id, content, image_url, video_url)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, content, image_url, video_url, created_at`,
+      [req.user.id, content || ((imageUrl || videoUrl) ? " " : ""), imageUrl, videoUrl]
     );
     const row = result.rows[0];
     res.status(201).json({ post: {
       id: row.id,
       text: String(row.content || "").trim(),
       image_url: row.image_url || null,
+      video_url: row.video_url || null,
       avatar_url: req.user.avatar_url || null,
       name: req.user.full_name,
       handle: "@" + req.user.username,
@@ -1445,6 +1450,7 @@ async function start() {
         )
       `);
       await pool.query("ALTER TABLE posts ADD COLUMN IF NOT EXISTS image_url TEXT");
+      await pool.query("ALTER TABLE posts ADD COLUMN IF NOT EXISTS video_url TEXT");
       await pool.query("CREATE INDEX IF NOT EXISTS posts_created_at_idx ON posts (created_at DESC, id DESC)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS user_follows (
