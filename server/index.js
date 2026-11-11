@@ -47,7 +47,7 @@ app.use((req, res, next) => {
 });
 
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.json({ limit: "8mb" }));
+app.use(express.json({ limit: "16mb" }));
 app.use(cookieParser());
 
 const authLimiter = rateLimit({
@@ -521,7 +521,7 @@ app.post("/api/posts", authenticate, async (req, res) => {
   if (imageUrl && videoUrl) return res.status(400).json({ error: "Add either a photo or a video to each post, not both." });
   if (content.length > 5000) return res.status(400).json({ error: "Posts must be 5,000 characters or fewer." });
   if (imageUrl && (!/^data:image\/(jpeg|png|webp);base64,/.test(imageUrl) || imageUrl.length > 1000000)) return res.status(400).json({ error: "Images must be JPG, PNG or WebP and smaller than 1 MB after resizing." });
-  if (videoUrl && (!/^data:video\/(mp4|webm);base64,/.test(videoUrl) || videoUrl.length > 7 * 1024 * 1024)) return res.status(400).json({ error: "Videos must be MP4 or WebM and smaller than 5 MB." });
+  if (videoUrl && (!/^data:video\/(mp4|webm);base64,/.test(videoUrl) || videoUrl.length > 14 * 1024 * 1024)) return res.status(400).json({ error: "Videos must be MP4 or WebM and smaller than 10 MB." });
   try {
     const result = await pool.query(
       `INSERT INTO posts (user_id, content, image_url, video_url)
