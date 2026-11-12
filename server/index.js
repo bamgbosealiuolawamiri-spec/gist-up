@@ -198,7 +198,7 @@ app.post("/api/live/sessions", authenticate, liveLimiter, async (req, res) => {
     const inviteCode = randomBytes(5).toString("hex").slice(0, 8).toUpperCase();
     const result = await pool.query(
       "INSERT INTO live_sessions (host_user_id, title, invite_code, expires_at) VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes') RETURNING id, title, invite_code, status, expires_at",
-      [req.user.id, title || "Private Gist-Up Live"]
+      [req.user.id, title || "Private Gist-Up Live", inviteCode]
     );
     res.status(201).json({ session: result.rows[0], role: "host" });
   } catch (error) {
