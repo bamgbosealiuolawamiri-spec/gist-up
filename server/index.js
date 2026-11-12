@@ -421,9 +421,10 @@ app.get("/api/admin/verification", authenticate, async (req, res) => {
   if (!isVerificationAdmin(req)) return res.status(403).json({ error: "Administrator access is required." });
   try {
     const result = await pool.query(
-      `SELECT v.id, v.status, v.reason, v.public_links, v.created_at, u.full_name, u.email, u.username
+      `SELECT v.id, v.status, v.reason, v.public_links, v.reviewer_note, v.created_at, v.reviewed_at,
+              u.full_name, u.email, u.username, u.is_verified
        FROM verification_applications v JOIN users u ON u.id = v.user_id
-       ORDER BY CASE WHEN v.status = 'pending' THEN 0 ELSE 1 END, v.created_at ASC LIMIT 100`
+       ORDER BY CASE WHEN v.status = 'pending' THEN 0 WHEN v.status = 'approved' THEN 1 ELSE 2 END, v.created_at DESC LIMIT 100`
     );
     res.json({ applications: result.rows });
   } catch (error) {
@@ -436,27 +437,36 @@ app.patch("/api/admin/verification/:id", authenticate, async (req, res) => {
   if (!isVerificationAdmin(req)) return res.status(403).json({ error: "Administrator access is required." });
   const status = String(req.body?.status || "");
   const reviewerNote = String(req.body?.reviewerNote || "").trim().slice(0, 500);
-  if (!["approved", "rejected"].includes(status)) return res.status(400).json({ error: "Choose approve or reject." });
+  if (!["approved", "rejected", "revoked"].includes(status)) return res.status(400).json({ error: "Choose approve, reject, or remove badge." });
+  if ((status === "rejected" || status === "revoked") && !reviewerNote) return res.status(400).json({ error: "Add a reason for this decision." });
   try {
-    const result = await pool.query(
-      `UPDATE verification_applications SET status = $1, reviewer_note = $2, reviewed_at = NOW()
-       WHERE id = $3 AND status = 'pending'
-       RETURNING id, user_id, status`,
-      [status, reviewerNote, req.params.id]
-    );
-    if (!result.rowCount) return res.status(404).json({ error: "This application is no longer pending." });
+    const result = status === "revoked"
+      ? await pool.query(
+          `UPDATE verification_applications SET status = 'revoked', reviewer_note = $1, reviewed_at = NOW()
+           WHERE id = $2 AND status = 'approved'
+           RETURNING id, user_id, status`,
+          [reviewerNote, req.params.id]
+        )
+      : await pool.query(
+          `UPDATE verification_applications SET status = $1, reviewer_note = $2, reviewed_at = NOW()
+           WHERE id = $3 AND status = 'pending'
+           RETURNING id, user_id, status`,
+          [status, reviewerNote, req.params.id]
+        );
+    if (!result.rowCount) return res.status(404).json({ error: status === "revoked" ? "This approved verification could not be found." : "This application is no longer pending." });
     await pool.query("UPDATE users SET is_verified = $1 WHERE id = $2", [status === "approved", result.rows[0].user_id]);
     if (mailTransport) {
       try {
-        const applicant = await pool.query("SELECT email, full_name FROM users WHERE id = $1", [result.rows[0].user_id]);
-        if (applicant.rowCount) await mailTransport.sendMail({
-          from: process.env.GISTUP_FROM_EMAIL || process.env.SMTP_USER,
-          to: applicant.rows[0].email,
-          subject: status === "approved" ? "Your Gist-Up verification was approved" : "An update on your Gist-Up verification",
-          text: status === "approved"
+        const applicant = await pool.query("SELECT email FROM users WHERE id = $1", [result.rows[0].user_id]);
+        if (applicant.rowCount) {
+          const subject = status === "approved" ? "Your Gist-Up verification was approved" : status === "revoked" ? "Your Gist-Up verification badge was removed" : "An update on your Gist-Up verification";
+          const message = status === "approved"
             ? "Your Gist-Up verification application has been approved. Your verified badge will appear on your account."
-            : "Your Gist-Up verification application was not approved this time." + (reviewerNote ? "\\nReview note: " + reviewerNote : "")
-        });
+            : status === "revoked"
+              ? "Your Gist-Up verified badge has been removed. Reason: " + reviewerNote + "\nYou may contact Gist-Up support if you believe this decision was made in error."
+              : "Your Gist-Up verification application was not approved this time.\nReview note: " + reviewerNote;
+          await mailTransport.sendMail({ from: process.env.GISTUP_FROM_EMAIL || process.env.SMTP_USER, to: applicant.rows[0].email, subject, text: message });
+        }
       } catch (mailError) { console.error("Verification decision email failed:", mailError?.message || "unknown error"); }
     }
     res.json({ ok: true, status });
@@ -1431,6 +1441,8 @@ async function start() {
           reviewed_at TIMESTAMPTZ
         )
       `);
+      await pool.query("ALTER TABLE verification_applications DROP CONSTRAINT IF EXISTS verification_applications_status_check");
+      await pool.query("ALTER TABLE verification_applications ADD CONSTRAINT verification_applications_status_check CHECK (status IN ('pending', 'approved', 'rejected', 'revoked'))");
       await pool.query("CREATE INDEX IF NOT EXISTS verification_applications_status_created_idx ON verification_applications (status, created_at ASC)");
       await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS verification_applications_one_pending_per_user ON verification_applications (user_id) WHERE status = 'pending'");
 
