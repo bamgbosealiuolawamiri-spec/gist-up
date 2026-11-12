@@ -469,7 +469,7 @@ app.patch("/api/admin/verification/:id", authenticate, async (req, res) => {
 app.get("/api/posts", authenticate, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT p.id, p.content, p.image_url, p.video_url, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url,
+      SELECT p.id, p.content, p.image_url, p.video_url, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url, u.is_verified,
              (SELECT COUNT(*)::int FROM post_likes pl WHERE pl.post_id = p.id) AS likes,
              (SELECT COUNT(*)::int FROM post_comments pc WHERE pc.post_id = p.id) AS comments,
              (SELECT COUNT(*)::int FROM post_reposts pr WHERE pr.post_id = p.id) AS reposts,
@@ -505,7 +505,8 @@ app.get("/api/posts", authenticate, async (req, res) => {
       isLiked: row.is_liked === true,
       isReposted: row.is_reposted === true,
       topic: "Community",
-      authorId: row.author_id
+      authorId: row.author_id,
+      is_verified: row.is_verified === true
     })) });
   } catch (error) {
     console.error("Posts fetch failed:", error?.message || "unknown error");
@@ -895,7 +896,7 @@ app.get("/api/comments/me", authenticate, async (req, res) => {
 app.get("/api/saved", authenticate, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT p.id, p.content, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url,
+      `SELECT p.id, p.content, p.created_at, u.id AS author_id, u.full_name, u.username, u.avatar_url, u.is_verified,
               (SELECT COUNT(*)::int FROM post_likes pl WHERE pl.post_id = p.id) AS likes,
               (SELECT COUNT(*)::int FROM post_comments pc WHERE pc.post_id = p.id) AS comments,
               EXISTS(SELECT 1 FROM post_likes mine WHERE mine.post_id = p.id AND mine.user_id = $1) AS is_liked
@@ -1001,7 +1002,7 @@ app.get("/api/users", authenticate, async (req, res) => {
   if (search && search.length < 2) return res.json({ users: [] });
   try {
     const result = await pool.query(
-      `SELECT u.id, u.full_name, u.username, u.bio, u.avatar_url,
+      `SELECT u.id, u.full_name, u.username, u.bio, u.avatar_url, u.is_verified,
               EXISTS(SELECT 1 FROM user_follows mine WHERE mine.follower_id = $1 AND mine.followed_id = u.id) AS is_following,
               (SELECT COUNT(*)::int FROM user_follows followers WHERE followers.followed_id = u.id) AS followers_count,
               (SELECT COUNT(*)::int FROM user_follows following WHERE following.follower_id = u.id) AS following_count
@@ -1058,7 +1059,7 @@ app.get("/api/users/:id/profile", authenticate, async (req, res) => {
       time: new Date(post.created_at).toLocaleString(),
       initials: String(post.full_name || post.username).split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
       tone: "lavender", likes: post.likes || 0, comments: post.comments || 0, reposts: post.reposts || 0,
-      isLiked: post.is_liked === true, isReposted: post.is_reposted === true, topic: "Community", authorId: post.author_id
+      isLiked: post.is_liked === true, isReposted: post.is_reposted === true, topic: "Community", authorId: post.author_id, is_verified: post.is_verified === true
     }));
     return res.json({
       profile: publicUser(row),
