@@ -146,3 +146,20 @@
 @media(max-width:640px){.verification-intro{padding:17px}.verification-application-card .section-title{gap:8px;flex-direction:column}}
 
 .post-video,.post-video-preview{display:block;width:100%;max-height:620px;background:#111;border-radius:16px;margin:12px 0 16px;object-fit:contain}.post-video-preview{max-height:360px;margin:0;border-radius:14px}
+
+
+/* Gist-Up Live camera setup: local preview only, no broadcast */
+.live-setup-panel{display:grid;gap:14px}
+.live-preview-frame{position:relative;display:grid;place-items:center;min-height:260px;overflow:hidden;border-radius:16px;background:#171522;aspect-ratio:16/9}
+.live-camera-video{display:block;width:100%;height:100%;max-height:520px;object-fit:contain;background:#171522}
+.live-preview-placeholder{display:flex;flex-direction:column;align-items:center;gap:10px;padding:24px;text-align:center;color:#c8c2d9}
+.live-preview-placeholder strong{color:#fff;font-size:15px}
+.live-preview-placeholder span{font-size:12px}
+.live-preview-status{position:absolute;top:12px;left:12px;padding:6px 9px;border-radius:7px;background:#373342;color:#fff;font-size:9px;font-weight:800;letter-spacing:.06em}
+.live-preview-status.live-preview-ready{background:#16794b}
+.live-setup-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.live-setup-actions .muted{font-size:12px;line-height:1.5}
+.live-safety-note{display:flex;align-items:flex-start;gap:10px;padding:13px;border-radius:12px;background:#f5f2ff;color:#5b45a3;font-size:12px;line-height:1.6}
+.live-safety-note svg{flex:0 0 auto}
+.live-start-disabled{justify-self:start;opacity:.58;cursor:not-allowed}
+@media(max-width:560px){.live-preview-frame{min-height:190px}.live-setup-actions{align-items:flex-start;flex-direction:column}}

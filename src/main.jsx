@@ -100,6 +100,11 @@ function App() {
   const [assistantStatus, setAssistantStatus] = useState("unknown");
   const [assistantModel, setAssistantModel] = useState("");
   const [authUser, setAuthUser] = useState(null);
+  const [liveTitle, setLiveTitle] = useState("");
+  const [liveStream, setLiveStream] = useState(null);
+  const [liveCameraBusy, setLiveCameraBusy] = useState(false);
+  const [liveCameraError, setLiveCameraError] = useState("");
+  useEffect(() => () => { liveStream?.getTracks().forEach(track => track.stop()); }, [liveStream]);
 
   const [verificationApplication, setVerificationApplication] = useState(null);
   const [verificationReason, setVerificationReason] = useState("");
@@ -1239,8 +1244,62 @@ function App() {
     return <div className="auth-shell"><div className="auth-left"><button className="brand auth-brand" onClick={()=>setAuthMode("welcome")}><span className="brand-mark"><img src="/gist-up-mark.svg" alt="" /></span><span>gist<span className="brand-up">up</span></span></button><div className="auth-promo"><span className="welcome-pill"><Sparkles size={13}/> YOUR PEOPLE. YOUR STORIES.</span><h1>A little more connection.<br/><span>A lot more you.</span></h1><p>Share your story, discover new perspectives, and find the people who make your world feel bigger.</p><div className="auth-floating-card"><div className="mini-avatars"><i>M</i><i>D</i><i>A</i></div><strong>Real people. Shared moments.</strong><small>Your next favourite conversation is out there.</small></div></div><div className="auth-foot">Made for the stories that bring us together. · © 2026 Gist Up</div></div><div className="auth-right"><div className="auth-form-wrap">{authMode==="welcome"?<><div className="auth-mobile-logo"><span className="brand-mark"><img src="/gist-up-mark.svg" alt="" /></span> gist<span className="brand-up">up</span></div><span className="eyebrow">WELCOME TO GIST UP</span><h2>Your people are here.</h2><p>Join conversations, share what matters, and make your space your own.</p><button className="primary-button auth-main-btn" onClick={()=>setAuthMode("signup")}>Create your account <ArrowRight size={17}/></button><button className="google-button" onClick={()=>notify("Google sign-in is not connected in this preview.")}><span className="google-g">G</span> Continue with Google</button><div className="auth-separator"><span>or</span></div><button className="outline-button auth-main-btn" onClick={()=>setAuthMode("login")}>Log in</button><button className="text-button preview-entry" onClick={()=>setAuthMode("app")}>Explore the website preview <ArrowRight size={15}/></button><small>By continuing, you agree to our Terms and Privacy Policy.</small></>:<><button className="back-link" onClick={()=>setAuthMode("welcome")}>← Back</button><span className="eyebrow">{authMode==="signup"?"GET STARTED":"WELCOME BACK"}</span><h2>{authMode==="signup"?"Create your account":"Log in to Gist Up"}</h2><p>{authMode==="signup"?"A few details and you're on your way.":"Your people and conversations are waiting."}</p>{authMode==="signup"&&<label className="auth-label">Full name<input value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="Your full name"/></label>}<label className="auth-label">Email address<input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/></label><label className="auth-label">Password<span className="password-input"><input type={showPassword?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 characters"/><button onClick={()=>setShowPassword(!showPassword)} type="button" aria-label="Show password">{showPassword?<EyeOff size={17}/>:<Eye size={17}/>}</button></span></label><button className="primary-button auth-main-btn" onClick={submitAuth} disabled={authBusy}>{authBusy ? "Please wait…" : authMode==="signup" ? "Create account" : "Log in"} <ArrowRight size={16}/></button>{authError && <p className="auth-error" role="alert">{authError}</p>}<div className="auth-switch">{authMode==="signup"?"Already have an account?":"New to Gist Up?"} <button onClick={()=>setAuthMode(authMode==="signup"?"login":"signup")}>{authMode==="signup"?"Log in":"Create an account"}</button></div><small>"Your account is protected by the Gist Up account service."</small></>}</div></div></div>;
   }
   if (authMode!=="app") return <>{AuthPage()}{notice&&<div className="toast" role="status">{notice}</div>}</>;
+  async function prepareLiveCamera() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setLiveCameraError("Camera access is unavailable in this browser. Open Gist Up using a modern browser over HTTPS.");
+      return;
+    }
+    setLiveCameraBusy(true);
+    setLiveCameraError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      setLiveStream(stream);
+    } catch (error) {
+      const message = error?.name === "NotAllowedError"
+        ? "Camera or microphone permission was denied. Allow access in your browser settings and try again."
+        : error?.name === "NotFoundError"
+          ? "No camera or microphone was found on this device."
+          : "Gist Up couldn't access your camera or microphone. Check that they are available and not being used by another app.";
+      setLiveCameraError(message);
+    } finally {
+      setLiveCameraBusy(false);
+    }
+  }
+  function stopLiveCamera() {
+    liveStream?.getTracks().forEach(track => track.stop());
+    setLiveStream(null);
+  }
   function LivePage() {
-    return <div className="screen-stack"><section className="feature-panel"><div><span className="welcome-pill"><Video size={13}/> GIST-UP LIVE</span><h2>Live is coming to Gist Up.</h2><p>We are preparing a way for creators to connect with their communities in real time.</p><p className="preview-note">Live broadcasting is not available yet. Before it launches, Gist Up will need viewer controls, reporting, moderation, and clear community safety rules.</p></div><Video size={54}/></section><section className="content-panel"><div className="section-title"><h2>What to expect</h2></div><p>• Live video sessions with viewer participation</p><p>• Comments and interaction controls</p><p>• Tools to report concerns and manage a live session</p><p className="muted">No stream can be started from this page yet.</p></section></div>;
+    return <div className="screen-stack">
+      <section className="feature-panel">
+        <div><span className="welcome-pill"><Video size={13}/> GIST-UP LIVE</span><h2>Get ready to go live.</h2><p>Set up your camera and microphone before your first private test.</p><p className="preview-note">This is camera setup only. Nothing is being recorded, saved, or broadcast to viewers.</p></div>
+        <Video size={54}/>
+      </section>
+      <section className="content-panel live-setup-panel">
+        <div className="section-title"><h2>Live setup</h2><span className="welcome-pill">PRIVATE TEST STAGE</span></div>
+        <label className="auth-label">Live title (optional)<input value={liveTitle} onChange={event=>setLiveTitle(event.target.value)} maxLength={100} placeholder="What would you like to talk about?"/></label>
+        <div className="live-preview-frame">
+          {liveStream
+            ? <video className="live-camera-video" autoPlay muted playsInline ref={element=>{if(element&&element.srcObject!==liveStream)element.srcObject=liveStream;}}/>
+            : <div className="live-preview-placeholder"><Video size={38}/><strong>Your camera preview will appear here</strong><span>Choose “Turn on camera” to check your setup.</span></div>}
+          <span className={"live-preview-status "+(liveStream?"live-preview-ready":"")}>{liveStream?"CAMERA READY":"CAMERA OFF"}</span>
+        </div>
+        {liveCameraError&&<p className="auth-error" role="alert">{liveCameraError}</p>}
+        <div className="live-setup-actions">
+          {!liveStream
+            ? <button className="primary-button" onClick={prepareLiveCamera} disabled={liveCameraBusy}><Camera size={16}/>{liveCameraBusy?"Requesting permission…":"Turn on camera"}</button>
+            : <button className="outline-button" onClick={stopLiveCamera}><X size={16}/> Turn off camera</button>}
+          <span className="muted">{liveStream?"Camera and microphone are active on this device.":"Your browser will ask for camera and microphone permission."}</span>
+        </div>
+        <div className="live-safety-note"><ShieldCheck size={17}/><span>Keep private details out of your broadcast. You can turn off your camera at any time. Do not start a public stream yet.</span></div>
+        <button className="primary-button live-start-disabled" disabled title="Live broadcasting will be enabled after private testing is complete.">Start Live — coming soon</button>
+        <p className="preview-note">Broadcasting, viewers, comments, gifts, Gist Coins and payouts are not active yet. We will test the free private setup before building those features.</p>
+      </section>
+      <section className="content-panel"><div className="section-title"><h2>What comes next</h2></div><p>• Private video connection tests</p><p>• Viewer comments and host controls</p><p>• Reporting, blocking and moderation</p><p>• Gist Coins, virtual gifts and creator earnings — after the live system is safe and tested</p></section>
+    </div>;
   }
   const page = active==="Home"?<HomePage/>:active==="Live"?<LivePage/>:active==="Explore"?<ExplorePage/>:active==="Communities"?<CommunitiesPage/>:active==="Messages"?MessagesPage():active==="Notifications"?<NotificationsPage/>:active==="Saved"?<SavedPage/>:active==="Profile"?(selectedProfile?<OtherProfilePage/>:<ProfilePage/>):active==="Creator Studio"?<CreatorStudioPage/>:active==="Gisty AI"?<AssistantPage/>:active==="Image Studio"?<ImageStudioPage/>:active==="Ads Manager"?<AdsManagerPage/>:active==="Settings & Privacy"?<SettingsPage/>:<HomePage />;
   return <div className="app-shell">
