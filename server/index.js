@@ -8,6 +8,7 @@ import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import nodemailer from "nodemailer";
+import { randomBytes } from "node:crypto";
 
 const { Pool } = pg;
 const app = express();
@@ -175,6 +176,103 @@ app.post("/api/admin/email-test", authenticate, authLimiter, async (req, res) =>
   } catch (error) {
     console.error("Admin email test failed:", error?.message || "unknown error");
     return res.status(502).json({ error: "Gist-Up could not send the test email. Check the SMTP credentials and try again." });
+  }
+});
+
+
+const liveLimiter = rateLimit({ windowMs: 60 * 1000, limit: 40, standardHeaders: "draft-7", legacyHeaders: false });
+async function getLiveParticipant(sessionId, userId) {
+  const result = await pool.query(
+    "SELECT id, host_user_id, viewer_user_id, status, expires_at FROM live_sessions WHERE id = $1 AND status = 'active' AND expires_at > NOW() LIMIT 1",
+    [sessionId]
+  );
+  const session = result.rows[0];
+  if (!session || (String(session.host_user_id) !== String(userId) && String(session.viewer_user_id) !== String(userId))) return null;
+  return session;
+}
+
+app.post("/api/live/sessions", authenticate, liveLimiter, async (req, res) => {
+  const title = String(req.body?.title || "").trim().slice(0, 100);
+  try {
+    await pool.query("UPDATE live_sessions SET status = 'ended' WHERE host_user_id = $1 AND status = 'active'", [req.user.id]);
+    const inviteCode = randomBytes(5).toString("hex").slice(0, 8).toUpperCase();
+    const result = await pool.query(
+      "INSERT INTO live_sessions (host_user_id, title, invite_code, expires_at) VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes') RETURNING id, title, invite_code, status, expires_at",
+      [req.user.id, title || "Private Gist-Up Live"]
+    );
+    res.status(201).json({ session: result.rows[0], role: "host" });
+  } catch (error) {
+    console.error("Live session create failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "We couldn't start a private live session. Please try again." });
+  }
+});
+
+app.post("/api/live/sessions/join", authenticate, liveLimiter, async (req, res) => {
+  const inviteCode = String(req.body?.inviteCode || "").trim().toUpperCase();
+  if (!/^[A-F0-9]{8}$/.test(inviteCode)) return res.status(400).json({ error: "Enter the 8-character invite code." });
+  try {
+    const result = await pool.query(
+      `UPDATE live_sessions SET viewer_user_id = $1
+       WHERE invite_code = $2 AND status = 'active' AND expires_at > NOW()
+         AND host_user_id <> $1 AND (viewer_user_id IS NULL OR viewer_user_id = $1)
+       RETURNING id, title, status, expires_at`,
+      [req.user.id, inviteCode]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "That invite code is invalid, expired, or already in use." });
+    res.json({ session: result.rows[0], role: "viewer" });
+  } catch (error) {
+    console.error("Live session join failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "We couldn't join that private session. Please try again." });
+  }
+});
+
+app.get("/api/live/sessions/:id/signals", authenticate, liveLimiter, async (req, res) => {
+  try {
+    const session = await getLiveParticipant(req.params.id, req.user.id);
+    if (!session) return res.status(404).json({ error: "This private live session has ended or is unavailable." });
+    const after = Math.max(0, Number.parseInt(req.query.after || "0", 10) || 0);
+    const result = await pool.query(
+      "SELECT id, sender_user_id, signal_type, payload FROM live_signals WHERE session_id = $1 AND id > $2 AND sender_user_id <> $3 ORDER BY id ASC LIMIT 50",
+      [session.id, after, req.user.id]
+    );
+    res.json({ signals: result.rows, status: session.status });
+  } catch (error) {
+    console.error("Live signal poll failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "Couldn't check the private connection." });
+  }
+});
+
+app.post("/api/live/sessions/:id/signals", authenticate, liveLimiter, async (req, res) => {
+  const signalType = String(req.body?.type || "");
+  const allowed = ["offer", "answer", "ice"];
+  if (!allowed.includes(signalType)) return res.status(400).json({ error: "Unsupported connection signal." });
+  const payload = req.body?.payload;
+  if (!payload || typeof payload !== "object" || JSON.stringify(payload).length > 20000) return res.status(400).json({ error: "Invalid connection signal." });
+  try {
+    const session = await getLiveParticipant(req.params.id, req.user.id);
+    if (!session) return res.status(404).json({ error: "This private live session has ended or is unavailable." });
+    const result = await pool.query(
+      "INSERT INTO live_signals (session_id, sender_user_id, signal_type, payload) VALUES ($1, $2, $3, $4::jsonb) RETURNING id",
+      [session.id, req.user.id, signalType, JSON.stringify(payload)]
+    );
+    res.status(201).json({ ok: true, id: result.rows[0].id });
+  } catch (error) {
+    console.error("Live signal send failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "Couldn't send the private connection signal." });
+  }
+});
+
+app.delete("/api/live/sessions/:id", authenticate, liveLimiter, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE live_sessions SET status = 'ended' WHERE id = $1 AND host_user_id = $2 AND status = 'active' RETURNING id",
+      [req.params.id, req.user.id]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "This live session is already ended or unavailable." });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("Live session end failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "Couldn't end the private live session." });
   }
 });
 
@@ -1608,6 +1706,32 @@ async function start() {
           PRIMARY KEY (user_id, conversation_id)
         )
       `);
+
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS live_sessions (
+          id BIGSERIAL PRIMARY KEY,
+          host_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          viewer_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+          title VARCHAR(100) NOT NULL DEFAULT 'Private Gist-Up Live',
+          invite_code VARCHAR(8) NOT NULL UNIQUE,
+          status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'ended')),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          expires_at TIMESTAMPTZ NOT NULL
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS live_sessions_active_idx ON live_sessions (status, expires_at)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS live_signals (
+          id BIGSERIAL PRIMARY KEY,
+          session_id BIGINT NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+          sender_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          signal_type VARCHAR(10) NOT NULL CHECK (signal_type IN ('offer', 'answer', 'ice')),
+          payload JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS live_signals_session_idx ON live_signals (session_id, id)");
 
       console.log("Gist Up database schema is ready.");
     } catch (error) {
