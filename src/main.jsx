@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Home, Compass, Users, MessageCircle, Bell, Bookmark, Settings, Plus, Search, Heart, MessageSquare, Repeat2, Send, Sparkles, Image as ImageIcon, Smile, Menu, X, ArrowRight, TrendingUp, MoreHorizontal, UserRound, ShieldCheck, SlidersHorizontal, Hash, Mail, Lock, Eye, EyeOff, ChevronRight, Check, Paperclip, SmilePlus, BarChart3, Megaphone, WandSparkles, CircleHelp, LogOut, Globe2, Moon, Shield, Trash2, Archive, Ban, Camera, Pencil, Share2, Flame, Clock, UserPlus, FileText, BookOpen, Bot, ArrowUpRight, ArrowDownToLine, Video } from "lucide-react";
 import "./index.css";
@@ -104,7 +104,22 @@ function App() {
   const [liveStream, setLiveStream] = useState(null);
   const [liveCameraBusy, setLiveCameraBusy] = useState(false);
   const [liveCameraError, setLiveCameraError] = useState("");
-  useEffect(() => () => { liveStream?.getTracks().forEach(track => track.stop()); }, [liveStream]);
+  const [liveInviteCode, setLiveInviteCode] = useState("");
+  const [liveJoinCode, setLiveJoinCode] = useState("");
+  const [liveSession, setLiveSession] = useState(null);
+  const [liveRole, setLiveRole] = useState("");
+  const [liveStatus, setLiveStatus] = useState("idle");
+  const [liveRemoteStream, setLiveRemoteStream] = useState(null);
+  const peerRef = useRef(null);
+  const pollTimerRef = useRef(null);
+  const signalCursorRef = useRef(0);
+  const pendingIceRef = useRef([]);
+  const livePollBusyRef = useRef(false);
+  useEffect(() => () => {
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    peerRef.current?.close();
+    liveStream?.getTracks().forEach(track => track.stop());
+  }, [liveStream]);
 
   const [verificationApplication, setVerificationApplication] = useState(null);
   const [verificationReason, setVerificationReason] = useState("");
@@ -1268,37 +1283,172 @@ function App() {
       setLiveCameraBusy(false);
     }
   }
+  async function sendLiveSignal(sessionId, type, payload) {
+    const response = await fetch(API_BASE + "/api/live/sessions/" + encodeURIComponent(sessionId) + "/signals", {
+      method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type, payload })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "The private connection could not be sent.");
+    return data;
+  }
+  async function applyRemoteIce(pc, candidate) {
+    if (!candidate) return;
+    if (!pc.remoteDescription) { pendingIceRef.current.push(candidate); return; }
+    try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch (error) { console.warn("Live ICE candidate skipped:", error?.message || error); }
+  }
+  async function flushPendingIce(pc) {
+    const queued = pendingIceRef.current.splice(0);
+    for (const candidate of queued) await applyRemoteIce(pc, candidate);
+  }
+  function startLiveSignalPolling(sessionId, role, pc) {
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    signalCursorRef.current = 0;
+    livePollBusyRef.current = false;
+    pollTimerRef.current = setInterval(async () => {
+      if (livePollBusyRef.current) return;
+      livePollBusyRef.current = true;
+      try {
+        const response = await fetch(API_BASE + "/api/live/sessions/" + encodeURIComponent(sessionId) + "/signals?after=" + signalCursorRef.current, { credentials: "include" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "The private session is no longer available.");
+        for (const signal of data.signals || []) {
+          signalCursorRef.current = Math.max(signalCursorRef.current, Number(signal.id) || 0);
+          if (signal.signal_type === "ice") await applyRemoteIce(pc, signal.payload);
+          if (role === "host" && signal.signal_type === "answer" && !pc.remoteDescription) {
+            await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+            await flushPendingIce(pc);
+            setLiveStatus("connecting");
+          }
+          if (role === "viewer" && signal.signal_type === "offer" && !pc.remoteDescription) {
+            await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+            await flushPendingIce(pc);
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await sendLiveSignal(sessionId, "answer", pc.localDescription);
+            setLiveStatus("connecting");
+          }
+        }
+        if (pc.connectionState === "connected") setLiveStatus("connected");
+        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") setLiveStatus("connection-limited");
+      } catch (error) {
+        setLiveCameraError(error.message || "The private connection was interrupted.");
+        setLiveStatus("connection-limited");
+      } finally { livePollBusyRef.current = false; }
+    }, 1100);
+  }
+  async function startPrivateLive() {
+    if (!liveStream) { setLiveCameraError("Turn on your camera and microphone first."); return; }
+    setLiveCameraError("");
+    try {
+      const response = await fetch(API_BASE + "/api/live/sessions", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: liveTitle })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Couldn't start the private session.");
+      const session = data.session;
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      peerRef.current = pc;
+      pc.onicecandidate = event => { if (event.candidate) sendLiveSignal(session.id, "ice", event.candidate.toJSON()).catch(error => setLiveCameraError(error.message)); };
+      pc.ontrack = event => setLiveRemoteStream(event.streams[0] || null);
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "connected") setLiveStatus("connected");
+        else if (["failed", "disconnected"].includes(pc.connectionState)) setLiveStatus("connection-limited");
+      };
+      liveStream.getTracks().forEach(track => pc.addTrack(track, liveStream));
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await sendLiveSignal(session.id, "offer", pc.localDescription);
+      setLiveSession(session); setLiveInviteCode(session.invite_code); setLiveRole("host"); setLiveStatus("waiting");
+      startLiveSignalPolling(session.id, "host", pc);
+    } catch (error) {
+      setLiveCameraError(error.message || "Couldn't start the private live session.");
+    }
+  }
+  async function joinPrivateLive() {
+    const code = liveJoinCode.trim().toUpperCase();
+    if (!code) { setLiveCameraError("Enter the invite code from the host."); return; }
+    setLiveCameraError("");
+    try {
+      const response = await fetch(API_BASE + "/api/live/sessions/join", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inviteCode: code })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Couldn't join that private session.");
+      const session = data.session;
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      peerRef.current = pc;
+      pc.onicecandidate = event => { if (event.candidate) sendLiveSignal(session.id, "ice", event.candidate.toJSON()).catch(error => setLiveCameraError(error.message)); };
+      pc.ontrack = event => setLiveRemoteStream(event.streams[0] || null);
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "connected") setLiveStatus("connected");
+        else if (["failed", "disconnected"].includes(pc.connectionState)) setLiveStatus("connection-limited");
+      };
+      setLiveSession(session); setLiveInviteCode(""); setLiveRole("viewer"); setLiveStatus("connecting"); setLiveJoinCode("");
+      startLiveSignalPolling(session.id, "viewer", pc);
+    } catch (error) {
+      setLiveCameraError(error.message || "Couldn't join that private live session.");
+    }
+  }
+  async function endPrivateLive() {
+    const session = liveSession;
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    pollTimerRef.current = null;
+    if (session && liveRole === "host") {
+      try { await fetch(API_BASE + "/api/live/sessions/" + encodeURIComponent(session.id), { method: "DELETE", credentials: "include" }); }
+      catch { /* The local connection is still closed below. */ }
+    }
+    peerRef.current?.close(); peerRef.current = null;
+    setLiveRemoteStream(null); setLiveSession(null); setLiveInviteCode(""); setLiveRole(""); setLiveStatus("idle");
+    pendingIceRef.current = []; signalCursorRef.current = 0;
+    if (liveRole === "host") {
+      liveStream?.getTracks().forEach(track => track.stop());
+      setLiveStream(null);
+    }
+  }
   function stopLiveCamera() {
+    if (liveSession) { endPrivateLive(); return; }
     liveStream?.getTracks().forEach(track => track.stop());
     setLiveStream(null);
   }
   function LivePage() {
     return <div className="screen-stack">
       <section className="feature-panel">
-        <div><span className="welcome-pill"><Video size={13}/> GIST-UP LIVE</span><h2>Get ready to go live.</h2><p>Set up your camera and microphone before your first private test.</p><p className="preview-note">This is camera setup only. Nothing is being recorded, saved, or broadcast to viewers.</p></div>
+        <div><span className="welcome-pill"><Video size={13}/> GIST-UP LIVE</span><h2>Private live connection.</h2><p>Host a private test or join using an invite code from someone you know.</p><p className="preview-note">Only one invited viewer can join. This is not a public broadcast.</p></div>
         <Video size={54}/>
       </section>
       <section className="content-panel live-setup-panel">
-        <div className="section-title"><h2>Live setup</h2><span className="welcome-pill">PRIVATE TEST STAGE</span></div>
-        <label className="auth-label">Live title (optional)<input value={liveTitle} onChange={event=>setLiveTitle(event.target.value)} maxLength={100} placeholder="What would you like to talk about?"/></label>
-        <div className="live-preview-frame">
-          {liveStream
-            ? <video className="live-camera-video" autoPlay muted playsInline ref={element=>{if(element&&element.srcObject!==liveStream)element.srcObject=liveStream;}}/>
-            : <div className="live-preview-placeholder"><Video size={38}/><strong>Your camera preview will appear here</strong><span>Choose “Turn on camera” to check your setup.</span></div>}
-          <span className={"live-preview-status "+(liveStream?"live-preview-ready":"")}>{liveStream?"CAMERA READY":"CAMERA OFF"}</span>
-        </div>
+        <div className="section-title"><h2>Live setup</h2><span className="welcome-pill">PRIVATE TEST</span></div>
+        {!liveSession && <>
+          <label className="auth-label">Live title (optional)<input value={liveTitle} onChange={event=>setLiveTitle(event.target.value)} maxLength={100} placeholder="What would you like to talk about?"/></label>
+          <div className="live-preview-frame">
+            {liveStream ? <video className="live-camera-video" autoPlay muted playsInline ref={element=>{if(element&&element.srcObject!==liveStream)element.srcObject=liveStream;}}/> : <div className="live-preview-placeholder"><Video size={38}/><strong>Your camera preview will appear here</strong><span>Turn on camera before hosting.</span></div>}
+            <span className={"live-preview-status "+(liveStream?"live-preview-ready":"")}>{liveStream?"CAMERA READY":"CAMERA OFF"}</span>
+          </div>
+          <div className="live-setup-actions">
+            {!liveStream ? <button className="primary-button" onClick={prepareLiveCamera} disabled={liveCameraBusy}><Camera size={16}/>{liveCameraBusy?"Requesting permission…":"Turn on camera"}</button> : <button className="outline-button" onClick={stopLiveCamera}><X size={16}/> Turn off camera</button>}
+            <span className="muted">Your browser will ask for camera and microphone permission.</span>
+          </div>
+          <button className="primary-button" onClick={startPrivateLive} disabled={!liveStream}>Start private live</button>
+          <div className="live-join-box"><strong>Joining a private live?</strong><label className="auth-label">Invite code<input value={liveJoinCode} onChange={event=>setLiveJoinCode(event.target.value.toUpperCase().slice(0,8))} maxLength={8} placeholder="Enter 8-character code"/></label><button className="outline-button" onClick={joinPrivateLive} disabled={liveJoinCode.trim().length!==8}>Join private live</button></div>
+        </>}
+        {liveSession && <div className="live-session-card">
+          <span className="welcome-pill">{liveRole==="host"?"YOU ARE HOSTING":"YOU JOINED AS VIEWER"}</span>
+          <h3>{liveSession.title}</h3>
+          {liveInviteCode && <div className="live-invite-code"><span>Share this private invite code with one viewer</span><strong>{liveInviteCode}</strong><button className="outline-button compact" onClick={()=>navigator.clipboard?.writeText(liveInviteCode).then(()=>notify("Invite code copied."))}>Copy code</button></div>}
+          <p className="muted">Connection: {liveStatus==="connected"?"Connected":liveStatus==="waiting"?"Waiting for the invited viewer…":liveStatus==="connection-limited"?"Connection limited on this network":"Connecting…"}</p>
+          <div className="live-preview-frame">
+            {liveRemoteStream ? <video className="live-camera-video" autoPlay playsInline ref={element=>{if(element&&element.srcObject!==liveRemoteStream)element.srcObject=liveRemoteStream;}}/> : <div className="live-preview-placeholder"><Video size={34}/><strong>{liveRole==="host"&&liveStatus==="connected"?"Viewer connected — your private stream is active":"Waiting for the other participant"}</strong><span>Keep this page open while the connection is established.</span></div>}
+          </div>
+          {liveRole==="host" && liveStream && <div className="live-local-preview"><span>Your camera</span><video className="live-camera-video" autoPlay muted playsInline ref={element=>{if(element&&element.srcObject!==liveStream)element.srcObject=liveStream;}}/></div>}
+          <button className="outline-button" onClick={endPrivateLive}>{liveRole==="host"?"End private live":"Leave private live"}</button>
+        </div>}
         {liveCameraError&&<p className="auth-error" role="alert">{liveCameraError}</p>}
-        <div className="live-setup-actions">
-          {!liveStream
-            ? <button className="primary-button" onClick={prepareLiveCamera} disabled={liveCameraBusy}><Camera size={16}/>{liveCameraBusy?"Requesting permission…":"Turn on camera"}</button>
-            : <button className="outline-button" onClick={stopLiveCamera}><X size={16}/> Turn off camera</button>}
-          <span className="muted">{liveStream?"Camera and microphone are active on this device.":"Your browser will ask for camera and microphone permission."}</span>
-        </div>
-        <div className="live-safety-note"><ShieldCheck size={17}/><span>Keep private details out of your broadcast. You can turn off your camera at any time. Do not start a public stream yet.</span></div>
-        <button className="primary-button live-start-disabled" disabled title="Live broadcasting will be enabled after private testing is complete.">Start Live — coming soon</button>
-        <p className="preview-note">Broadcasting, viewers, comments, gifts, Gist Coins and payouts are not active yet. We will test the free private setup before building those features.</p>
+        <div className="live-safety-note"><ShieldCheck size={17}/><span>Share the invite code only with someone you trust. Do not show private information. The host can end the session at any time.</span></div>
+        <p className="preview-note">This free-first test uses direct browser video. Some networks may block the connection; this version does not support unlimited viewers or guaranteed connectivity.</p>
       </section>
-      <section className="content-panel"><div className="section-title"><h2>What comes next</h2></div><p>• Private video connection tests</p><p>• Viewer comments and host controls</p><p>• Reporting, blocking and moderation</p><p>• Gist Coins, virtual gifts and creator earnings — after the live system is safe and tested</p></section>
     </div>;
   }
   const page = active==="Home"?<HomePage/>:active==="Live"?<LivePage/>:active==="Explore"?<ExplorePage/>:active==="Communities"?<CommunitiesPage/>:active==="Messages"?MessagesPage():active==="Notifications"?<NotificationsPage/>:active==="Saved"?<SavedPage/>:active==="Profile"?(selectedProfile?<OtherProfilePage/>:<ProfilePage/>):active==="Creator Studio"?<CreatorStudioPage/>:active==="Gisty AI"?<AssistantPage/>:active==="Image Studio"?<ImageStudioPage/>:active==="Ads Manager"?<AdsManagerPage/>:active==="Settings & Privacy"?<SettingsPage/>:<HomePage />;

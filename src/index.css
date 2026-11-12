@@ -163,3 +163,13 @@
 .live-safety-note svg{flex:0 0 auto}
 .live-start-disabled{justify-self:start;opacity:.58;cursor:not-allowed}
 @media(max-width:560px){.live-preview-frame{min-height:190px}.live-setup-actions{align-items:flex-start;flex-direction:column}}
+
+/* Private invite-only Gist-Up Live connection */
+
+.live-join-box,.live-session-card{display:grid;gap:12px;padding:16px;border:1px solid #e7e1f2;border-radius:14px;background:#fbfaff}
+.live-join-box>strong,.live-invite-code>span,.live-local-preview>span{font-size:13px;color:#5b526b}
+.live-invite-code{display:grid;justify-items:start;gap:8px;padding:14px;border-radius:12px;background:#f1edfb}
+.live-invite-code strong{font-size:26px;letter-spacing:.18em;color:#5b35b1}
+.live-local-preview{display:grid;gap:8px}
+.live-local-preview .live-camera-video{max-height:220px;border-radius:12px}
+.live-session-card h3{margin:0;font-size:18px}
