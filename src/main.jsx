@@ -104,6 +104,7 @@ function App() {
   const [liveStream, setLiveStream] = useState(null);
   const [liveCameraBusy, setLiveCameraBusy] = useState(false);
   const [liveCameraError, setLiveCameraError] = useState("");
+  useEffect(() => () => { liveStream?.getTracks().forEach(track => track.stop()); }, [liveStream]);
 
   const [verificationApplication, setVerificationApplication] = useState(null);
   const [verificationReason, setVerificationReason] = useState("");
@@ -1255,10 +1256,7 @@ function App() {
         audio: true,
         video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }
       });
-      setLiveStream(current => {
-        current?.getTracks().forEach(track => track.stop());
-        return stream;
-      });
+      setLiveStream(stream);
     } catch (error) {
       const message = error?.name === "NotAllowedError"
         ? "Camera or microphone permission was denied. Allow access in your browser settings and try again."
@@ -1274,9 +1272,6 @@ function App() {
     liveStream?.getTracks().forEach(track => track.stop());
     setLiveStream(null);
   }
-  useEffect(() => () => {
-    liveStream?.getTracks().forEach(track => track.stop());
-  }, [liveStream]);
   function LivePage() {
     return <div className="screen-stack">
       <section className="feature-panel">
