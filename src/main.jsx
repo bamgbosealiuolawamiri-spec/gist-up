@@ -140,16 +140,18 @@ function App() {
     finally { setVerificationBusy(false); }
   }
   async function reviewVerificationApplication(id, status) {
-    const reviewerNote = status === "rejected" ? window.prompt("Optional note for the applicant (keep it respectful):") || "" : "";
+    const prompts = { rejected: "Enter a brief reason for rejecting this application:", revoked: "Enter the reason for removing this verified badge:" };
+    const reviewerNote = prompts[status] ? window.prompt(prompts[status]) : "";
+    if (prompts[status] && (reviewerNote === null || !reviewerNote.trim())) return;
     try {
       const response = await fetch(API_BASE + "/api/admin/verification/" + encodeURIComponent(id), {
         method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status, reviewerNote })
+        body: JSON.stringify({ status, reviewerNote: reviewerNote || "" })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Couldn't save this decision.");
-      setVerificationQueue(items => items.map(item => String(item.id) === String(id) ? { ...item, status } : item));
-      notify(status === "approved" ? "Application approved." : "Application rejected.");
+      setVerificationQueue(items => items.map(item => String(item.id) === String(id) ? { ...item, status, is_verified: status === "approved", reviewer_note: reviewerNote || "" } : item));
+      notify(status === "approved" ? "Application approved." : status === "revoked" ? "Verified badge removed." : "Application rejected.");
     } catch (error) { notify(error.message || "Couldn't save this decision."); }
   }
 
@@ -1189,8 +1191,20 @@ function App() {
 
       {settingsTab==="Verification"&&<div className="verification-panel">
         <div className="verification-intro"><span className="welcome-pill"><ShieldCheck size={14}/> ACCOUNT AUTHENTICITY</span><h3>Request a verified badge</h3><p>Verification helps people recognise authentic accounts. Applications are reviewed by the Gist-Up team; submitting a request does not guarantee approval.</p></div>
+        <div className="content-panel verification-policy">
+          <h3>Gist-Up Verification Rules</h3>
+          <p>Verification is free and identifies authentic accounts. It is not an endorsement of an account or its content.</p>
+          <strong>Who can apply?</strong>
+          <ul><li>Content creators with a genuine public presence.</li><li>Public figures and notable professionals.</li><li>Legitimate businesses, brands and organisations.</li></ul>
+          <strong>What we check</strong>
+          <ul><li>Your account is active and profile information is accurate.</li><li>You represent the person, brand or organisation named on the account.</li><li>Public information reasonably supports your request.</li><li>Your account follows Gist-Up Community Guidelines.</li></ul>
+          <strong>When a badge may be removed</strong>
+          <p>Gist-Up may remove a badge for false information, impersonation, fraudulent verification, serious or repeated guideline violations, or an unapproved change of account ownership. We will provide a reason where possible. You may contact Gist-Up support to appeal.</p>
+          <p className="preview-note">Never send passwords, login codes or private identity documents. Applying does not guarantee approval.</p>
+        </div>
         {verificationApplication?.status==="approved" ? <div className="empty-state-box"><ShieldCheck size={28}/><strong>Your account is verified</strong><p>Your verification application was approved.</p></div>
         : verificationApplication?.status==="pending" ? <div className="empty-state-box"><Clock size={26}/><strong>Application under review</strong><p>Your request was submitted on {new Date(verificationApplication.created_at).toLocaleDateString()}. We'll update this page when a decision is made.</p></div>
+        : verificationApplication?.status==="revoked" ? <div className="empty-state-box"><Shield size={26}/><strong>Your verified badge was removed</strong><p>{verificationApplication.reviewer_note || "Your account is no longer verified."} You may submit a new application after addressing the reason.</p></div>
         : <><div className="verification-safety-note"><Shield size={17}/><span>For your privacy, do not upload or send identity documents, passwords, sign-in codes, or private information. Share only public links that help confirm your account is authentic.</span></div>
           <label className="auth-label">Why should this account be verified?<textarea value={verificationReason} onChange={e=>setVerificationReason(e.target.value)} maxLength={1000} placeholder="Tell us what makes this account notable or how people can confirm it belongs to you." rows={5}/></label>
           <label className="auth-label">Public profile or website link (optional)<input type="url" value={verificationLink} onChange={e=>setVerificationLink(e.target.value)} placeholder="https://example.com/your-public-profile"/></label>
@@ -1201,10 +1215,12 @@ function App() {
       {settingsTab==="Verification review"&&isVerificationAdmin&&<div className="verification-review">
         <p className="muted">Review requests carefully. Check only public information and never ask applicants to send passwords or private identity documents.</p>
         {verificationQueueBusy?<p className="muted">Loading applications…</p>:verificationQueue.length?verificationQueue.map(item=><article className="content-panel verification-application-card" key={item.id}>
-          <div className="section-title"><div><h3>{item.full_name}</h3><span>@{item.username} · {item.email}</span></div><span className={"welcome-pill verification-status "+item.status}>{item.status.toUpperCase()}</span></div>
+          <div className="section-title"><div><h3>{item.full_name} {item.is_verified&&<VerifiedBadge size={14}/>}</h3><span>@{item.username} · {item.email}</span></div><span className={"welcome-pill verification-status "+item.status}>{item.status.toUpperCase()}</span></div>
           <p>{item.reason}</p>{item.public_links&&<a href={item.public_links} target="_blank" rel="noreferrer">Open public profile link <ArrowUpRight size={14}/></a>}
+          {item.reviewer_note&&<p className="preview-note">Admin note: {item.reviewer_note}</p>}
           <small>Submitted {new Date(item.created_at).toLocaleString()}</small>
           {item.status==="pending"&&<div className="verification-actions"><button className="primary-button" onClick={()=>reviewVerificationApplication(item.id,"approved")}><Check size={15}/> Approve</button><button className="outline-button" onClick={()=>reviewVerificationApplication(item.id,"rejected")}>Reject</button></div>}
+          {item.status==="approved"&&item.is_verified&&<div className="verification-actions"><button className="outline-button" onClick={()=>reviewVerificationApplication(item.id,"revoked")}><Shield size={15}/> Remove badge</button></div>}
         </article>):<div className="empty-state-box"><ShieldCheck size={26}/><strong>No verification applications yet</strong><p>New requests will appear here.</p></div>}
       </div>}
       {settingsTab==="Account"&&<><div className="setting-row"><div><strong>Profile information</strong><span>Change your name, handle and bio.</span></div><button className="outline-button compact" onClick={()=>setEditProfile(true)}>Edit profile</button></div><div className="setting-row"><div><strong>Email address</strong><span>{authUser?.email||email||"Your signed-in email"}</span></div><span>Account email</span></div><div className="setting-row"><div><strong>Password & security</strong><span>Change your password using your current password.</span></div><button className="outline-button compact" onClick={()=>setShowPasswordForm(value=>!value)}>{showPasswordForm?"Cancel":"Change password"}</button></div>{showPasswordForm&&<div className="content-panel"><label className="auth-label">Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)}/></label><label className="auth-label">New password<input type="password" autoComplete="new-password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} minLength={8}/></label><label className="auth-label">Confirm new password<input type="password" autoComplete="new-password" value={confirmNewPassword} onChange={e=>setConfirmNewPassword(e.target.value)}/></label><button className="primary-button" disabled={passwordBusy||!currentPassword||newPassword.length<8||!confirmNewPassword} onClick={updatePassword}>{passwordBusy?"Updating…":"Update password"} <Lock size={15}/></button></div>}</>}
