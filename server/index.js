@@ -180,7 +180,7 @@ app.post("/api/admin/email-test", authenticate, authLimiter, async (req, res) =>
 });
 
 
-const liveLimiter = rateLimit({ windowMs: 60 * 1000, limit: 40, standardHeaders: "draft-7", legacyHeaders: false });
+const liveLimiter = rateLimit({ windowMs: 60 * 1000, limit: 70, standardHeaders: "draft-7", legacyHeaders: false });
 async function getLiveParticipant(sessionId, userId) {
   const result = await pool.query(
     "SELECT id, host_user_id, viewer_user_id, status, expires_at FROM live_sessions WHERE id = $1 AND status = 'active' AND expires_at > NOW() LIMIT 1",
