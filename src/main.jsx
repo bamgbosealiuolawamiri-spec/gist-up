@@ -1318,7 +1318,7 @@ function App() {
           if (role === "host" && signal.signal_type === "answer" && !pc.remoteDescription) {
             await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
             await flushPendingIce(pc);
-            setLiveStatus("connected");
+            setLiveStatus("connecting");
           }
           if (role === "viewer" && signal.signal_type === "offer" && !pc.remoteDescription) {
             await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
@@ -1440,7 +1440,7 @@ function App() {
           {liveInviteCode && <div className="live-invite-code"><span>Share this private invite code with one viewer</span><strong>{liveInviteCode}</strong><button className="outline-button compact" onClick={()=>navigator.clipboard?.writeText(liveInviteCode).then(()=>notify("Invite code copied."))}>Copy code</button></div>}
           <p className="muted">Connection: {liveStatus==="connected"?"Connected":liveStatus==="waiting"?"Waiting for the invited viewer…":liveStatus==="connection-limited"?"Connection limited on this network":"Connecting…"}</p>
           <div className="live-preview-frame">
-            {liveRemoteStream ? <video className="live-camera-video" autoPlay playsInline ref={element=>{if(element&&element.srcObject!==liveRemoteStream)element.srcObject=liveRemoteStream;}}/> : <div className="live-preview-placeholder"><Video size={34}/><strong>Waiting for the other participant</strong><span>Keep this page open while the connection is established.</span></div>}
+            {liveRemoteStream ? <video className="live-camera-video" autoPlay playsInline ref={element=>{if(element&&element.srcObject!==liveRemoteStream)element.srcObject=liveRemoteStream;}}/> : <div className="live-preview-placeholder"><Video size={34}/><strong>{liveRole==="host"&&liveStatus==="connected"?"Viewer connected — your private stream is active":"Waiting for the other participant"}</strong><span>Keep this page open while the connection is established.</span></div>}
           </div>
           {liveRole==="host" && liveStream && <div className="live-local-preview"><span>Your camera</span><video className="live-camera-video" autoPlay muted playsInline ref={element=>{if(element&&element.srcObject!==liveStream)element.srcObject=liveStream;}}/></div>}
           <button className="outline-button" onClick={endPrivateLive}>{liveRole==="host"?"End private live":"Leave private live"}</button>
