@@ -195,7 +195,9 @@ async function getLiveRoster(sessionId) {
   const result = await pool.query(
     `SELECT u.id, u.full_name, u.username, u.avatar_url
      FROM live_participants p JOIN users u ON u.id = p.user_id
-     WHERE p.session_id = $1 AND p.left_at IS NULL ORDER BY p.joined_at ASC`,
+     WHERE p.session_id = $1 AND p.left_at IS NULL
+       AND p.last_seen_at > NOW() - INTERVAL '90 seconds'
+     ORDER BY p.joined_at ASC`,
     [sessionId]
   );
   return result.rows;
@@ -237,14 +239,14 @@ app.post("/api/live/sessions/join", authenticate, liveLimiter, async (req, res) 
     const session = found.rows[0];
     if (String(session.host_user_id) === String(req.user.id)) { await client.query("ROLLBACK"); return res.status(400).json({ error: "The host is already in this room." }); }
     const existing = await client.query("SELECT left_at FROM live_participants WHERE session_id = $1 AND user_id = $2", [session.id, req.user.id]);
-    const count = await client.query("SELECT COUNT(*)::int AS count FROM live_participants WHERE session_id = $1 AND left_at IS NULL", [session.id]);
+    const count = await client.query("SELECT COUNT(*)::int AS count FROM live_participants WHERE session_id = $1 AND left_at IS NULL AND last_seen_at > NOW() - INTERVAL '90 seconds'", [session.id]);
     if ((!existing.rowCount || existing.rows[0].left_at) && Number(count.rows[0].count) >= 4) {
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "This private room is full. It supports up to 4 people." });
     }
     await client.query(
       `INSERT INTO live_participants (session_id, user_id) VALUES ($1, $2)
-       ON CONFLICT (session_id, user_id) DO UPDATE SET joined_at = NOW(), left_at = NULL`,
+       ON CONFLICT (session_id, user_id) DO UPDATE SET joined_at = NOW(), last_seen_at = NOW(), left_at = NULL`,
       [session.id, req.user.id]
     );
     await client.query("COMMIT");
@@ -261,6 +263,26 @@ app.get("/api/live/sessions/:id/signals", authenticate, liveLimiter, async (req,
   try {
     const session = await getLiveParticipant(req.params.id, req.user.id);
     if (!session) return res.status(404).json({ error: "This private live session has ended or is unavailable." });
+    await pool.query(
+      "UPDATE live_participants SET last_seen_at = NOW() WHERE session_id = $1 AND user_id = $2 AND left_at IS NULL",
+      [session.id, req.user.id]
+    );
+    await pool.query(
+      `UPDATE live_sessions s SET status = 'ended'
+       WHERE s.id = $1 AND s.status = 'active'
+         AND EXISTS (
+           SELECT 1 FROM live_participants p
+           WHERE p.session_id = s.id AND p.user_id = s.host_user_id
+             AND p.left_at IS NULL AND p.last_seen_at < NOW() - INTERVAL '90 seconds'
+         )`,
+      [session.id]
+    );
+    await pool.query(
+      "UPDATE live_participants SET left_at = NOW() WHERE session_id = $1 AND left_at IS NULL AND last_seen_at < NOW() - INTERVAL '90 seconds'",
+      [session.id]
+    );
+    const refreshedSession = await getLiveParticipant(req.params.id, req.user.id);
+    if (!refreshedSession) return res.status(410).json({ error: "The host has left or this private room has expired." });
     const after = Math.max(0, Number.parseInt(req.query.after || "0", 10) || 0);
     const [signals, participants] = await Promise.all([
       pool.query(
@@ -1790,7 +1812,8 @@ async function start() {
           PRIMARY KEY (session_id, user_id)
         )
       `);
-      await pool.query("CREATE INDEX IF NOT EXISTS live_participants_active_idx ON live_participants (session_id, left_at)");
+      await pool.query("ALTER TABLE live_participants ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
+      await pool.query("CREATE INDEX IF NOT EXISTS live_participants_active_idx ON live_participants (session_id, left_at, last_seen_at)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS live_signals (
           id BIGSERIAL PRIMARY KEY,
