@@ -101,6 +101,26 @@ function App() {
   const [assistantModel, setAssistantModel] = useState("");
   const [authUser, setAuthUser] = useState(null);
   const [liveTitle, setLiveTitle] = useState("");
+  const [liveBirthDate, setLiveBirthDate] = useState("");
+  const [liveRulesAccepted, setLiveRulesAccepted] = useState(false);
+  const [liveEligibility, setLiveEligibility] = useState(null);
+  const [liveEligibilityBusy, setLiveEligibilityBusy] = useState(false);
+  const [liveEligibilityError, setLiveEligibilityError] = useState("");
+  const [publicRooms, setPublicRooms] = useState([]);
+  const [publicRoom, setPublicRoom] = useState(null);
+  const [publicRole, setPublicRole] = useState("");
+  const [publicViewers, setPublicViewers] = useState([]);
+  const [publicMessages, setPublicMessages] = useState([]);
+  const [publicMessageText, setPublicMessageText] = useState("");
+  const [publicError, setPublicError] = useState("");
+  const [publicRemoteStream, setPublicRemoteStream] = useState(null);
+  const [publicCommentsEnabled, setPublicCommentsEnabled] = useState(true);
+  const publicPollRef = useRef(null);
+  const publicPeerRef = useRef(new Map());
+  const publicSignalCursorRef = useRef(0);
+  const publicMessageCursorRef = useRef(0);
+  const publicPollBusyRef = useRef(false);
+
   const [liveStream, setLiveStream] = useState(null);
   const [liveCameraBusy, setLiveCameraBusy] = useState(false);
   const [liveCameraError, setLiveCameraError] = useState("");
@@ -111,6 +131,25 @@ function App() {
   const [liveStatus, setLiveStatus] = useState("idle");
   const [liveParticipants, setLiveParticipants] = useState([]);
   const [liveRemoteStreams, setLiveRemoteStreams] = useState({});
+
+  useEffect(() => {
+    if (!authUser?.id) { setLiveEligibility(null); return; }
+    fetch(API_BASE + "/api/live/eligibility", { credentials: "include" })
+      .then(async r => { const d = await r.json().catch(() => ({})); if (r.ok) setLiveEligibility(d.eligibility || null); })
+      .catch(() => {});
+  }, [authUser?.id]);
+  useEffect(() => {
+    if (active !== "Live" || publicRoom) return;
+    let alive = true;
+    const load = () => fetch(API_BASE + "/api/public-live", { credentials: "include" })
+      .then(async r => { const d = await r.json().catch(() => ({})); if (alive && r.ok) setPublicRooms(d.rooms || []); }).catch(() => {});
+    load(); const timer = setInterval(load, 10000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [active, publicRoom?.id]);
+  useEffect(() => () => {
+    if (publicPollRef.current) clearInterval(publicPollRef.current);
+    publicPeerRef.current.forEach(pc => pc.close()); publicPeerRef.current.clear();
+  }, []);
   const [liveMuted, setLiveMuted] = useState(false);
   const [liveCameraOff, setLiveCameraOff] = useState(false);
   const peerConnectionsRef = useRef(new Map());
@@ -1402,6 +1441,101 @@ function App() {
       } finally { livePollBusyRef.current = false; }
     }, 1800);
   }
+
+  async function submitLiveEligibility() {
+    setLiveEligibilityError("");
+    if (!liveBirthDate || !liveRulesAccepted) { setLiveEligibilityError("Complete the age check and accept the Live Rules."); return; }
+    setLiveEligibilityBusy(true);
+    try {
+      const r = await fetch(API_BASE + "/api/live/eligibility", { method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body:JSON.stringify({dateOfBirth:liveBirthDate,acceptedRules:true}) });
+      const d = await r.json().catch(()=>({}));
+      if (!r.ok) throw new Error(d.error || "Couldn't save the eligibility check.");
+      setLiveEligibility(d.eligibility || null); setLiveBirthDate("");
+      notify(d.eligibility?.eligible ? "Live eligibility saved." : "This account cannot host public Live.");
+    } catch(e) { setLiveEligibilityError(e.message || "Couldn't save eligibility."); }
+    finally { setLiveEligibilityBusy(false); }
+  }
+  async function sendPublicSignal(roomId, targetId, type, payload) {
+    const r = await fetch(API_BASE + "/api/public-live/" + encodeURIComponent(roomId) + "/signals", { method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body:JSON.stringify({recipientUserId:targetId,type,payload}) });
+    const d = await r.json().catch(()=>({})); if (!r.ok) throw new Error(d.error || "Live video connection failed."); return d;
+  }
+  function createPublicPeer(room, person, shouldOffer, role) {
+    const id=String(person.id); if(publicPeerRef.current.has(id)) return publicPeerRef.current.get(id);
+    const pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]});
+    publicPeerRef.current.set(id,pc);
+    if(role==="host" && liveStream) liveStream.getTracks().forEach(track=>pc.addTrack(track,liveStream));
+    pc.onicecandidate=e=>{if(e.candidate)sendPublicSignal(room.id,id,"ice",e.candidate.toJSON()).catch(err=>setPublicError(err.message));};
+    pc.ontrack=e=>setPublicRemoteStream(e.streams?.[0]||new MediaStream([e.track]));
+    if(shouldOffer) (async()=>{try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);await sendPublicSignal(room.id,id,"offer",pc.localDescription);}catch(e){setPublicError(e.message||"Couldn't start the video connection.");}})();
+    return pc;
+  }
+  function startPublicPolling(room, role) {
+    if(publicPollRef.current)clearInterval(publicPollRef.current);
+    publicSignalCursorRef.current=0;publicMessageCursorRef.current=0;publicPollBusyRef.current=false;
+    publicPollRef.current=setInterval(async()=>{
+      if(publicPollBusyRef.current)return;publicPollBusyRef.current=true;
+      try{
+        const url=API_BASE+"/api/public-live/"+encodeURIComponent(room.id)+"/state?afterSignal="+publicSignalCursorRef.current+"&afterMessage="+publicMessageCursorRef.current;
+        const r=await fetch(url,{credentials:"include"});const d=await r.json().catch(()=>({}));
+        if(!r.ok)throw new Error(d.error||"This broadcast is no longer available.");
+        setPublicViewers(d.viewers||[]);setPublicCommentsEnabled(d.room?.comments_enabled!==false);
+        if(d.messages?.length){setPublicMessages(old=>[...old,...d.messages].slice(-80));publicMessageCursorRef.current=Math.max(publicMessageCursorRef.current,...d.messages.map(x=>Number(x.id)||0));}
+        if(role==="host")for(const person of (d.viewers||[]))if(!publicPeerRef.current.has(String(person.id)))createPublicPeer(room,person,true,role);
+        for(const signal of (d.signals||[])){
+          publicSignalCursorRef.current=Math.max(publicSignalCursorRef.current,Number(signal.id)||0);
+          const sender=role==="host"?(d.viewers||[]).find(x=>String(x.id)===String(signal.sender_user_id)):{id:room.host_user_id};
+          if(!sender)continue;const pc=createPublicPeer(room,sender,false,role);
+          if(signal.signal_type==="ice"){if(pc.remoteDescription){try{await pc.addIceCandidate(new RTCIceCandidate(signal.payload));}catch{}}}
+          if(signal.signal_type==="offer"&&!pc.remoteDescription){await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));const answer=await pc.createAnswer();await pc.setLocalDescription(answer);await sendPublicSignal(room.id,sender.id,"answer",pc.localDescription);}
+          if(signal.signal_type==="answer"&&!pc.remoteDescription)await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+        }
+      }catch(e){setPublicError(e.message||"Live connection interrupted.");if(/ended|unavailable|removed|not an active viewer/i.test(e.message||""))leavePublicLive(false);}
+      finally{publicPollBusyRef.current=false;}
+    },1600);
+  }
+  async function startPublicLive() {
+    if(!liveStream){setPublicError("Turn on your camera and microphone first.");return;}
+    setPublicError("");
+    try{
+      const r=await fetch(API_BASE+"/api/public-live",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:liveTitle})});
+      const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||"Couldn't start public Live.");
+      setPublicRoom(d.room);setPublicRole("host");setPublicMessages([]);setPublicViewers([]);startPublicPolling(d.room,"host");
+    }catch(e){setPublicError(e.message||"Couldn't start public Live.");}
+  }
+  async function joinPublicLive(room) {
+    setPublicError("");
+    try{
+      const r=await fetch(API_BASE+"/api/public-live/"+encodeURIComponent(room.id)+"/join",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:"{}"});
+      const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||"Couldn't join this broadcast.");
+      setPublicRoom(d.room);setPublicRole("viewer");setPublicMessages([]);setPublicViewers([]);startPublicPolling(d.room,"viewer");
+    }catch(e){setPublicError(e.message||"Couldn't join this broadcast.");}
+  }
+  async function leavePublicLive(endRoom=true) {
+    const room=publicRoom;if(publicPollRef.current)clearInterval(publicPollRef.current);publicPollRef.current=null;
+    publicPeerRef.current.forEach(pc=>pc.close());publicPeerRef.current.clear();setPublicRemoteStream(null);
+    if(room?.id){try{await fetch(API_BASE+"/api/public-live/"+encodeURIComponent(room.id)+(publicRole==="host"&&endRoom?"":"/leave"),{method:"DELETE",credentials:"include"});}catch{}}
+    setPublicRoom(null);setPublicRole("");setPublicViewers([]);setPublicMessages([]);
+    fetch(API_BASE+"/api/public-live",{credentials:"include"}).then(r=>r.json()).then(d=>setPublicRooms(d.rooms||[])).catch(()=>{});
+  }
+  async function sendPublicMessage(type="comment",body=publicMessageText) {
+    if(!publicRoom||!body.trim())return;
+    try{
+      const r=await fetch(API_BASE+"/api/public-live/"+encodeURIComponent(publicRoom.id)+"/messages",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({type,body:body.trim()})});
+      const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||"Couldn't send that interaction.");
+      if(d.message){setPublicMessages(old=>[...old,d.message].slice(-80));publicMessageCursorRef.current=Math.max(publicMessageCursorRef.current,Number(d.message.id)||0);}
+      if(type==="comment")setPublicMessageText("");
+    }catch(e){setPublicError(e.message||"Couldn't send that interaction.");}
+  }
+  async function moderatePublicLive(action,userId,enabled) {
+    if(!publicRoom)return;
+    try{
+      const r=await fetch(API_BASE+"/api/public-live/"+encodeURIComponent(publicRoom.id)+"/moderation",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,userId,enabled})});
+      const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||"Moderation action failed.");
+      if(action==="comments")setPublicCommentsEnabled(d.comments_enabled);
+      if(action==="remove")setPublicViewers(old=>old.filter(x=>String(x.id)!==String(userId)));
+    }catch(e){setPublicError(e.message||"Moderation action failed.");}
+  }
+
   async function startPrivateLive() {
     if (!liveStream) { setLiveCameraError("Turn on your camera and microphone first."); return; }
     setLiveCameraError("");
@@ -1473,51 +1607,47 @@ function App() {
     liveStream?.getTracks().forEach(track => track.stop());
     setLiveStream(null);
   }
+
   function LivePage() {
     return <div className="screen-stack">
-      <section className="feature-panel">
-        <div><span className="welcome-pill"><Video size={13}/> GIST-UP LIVE</span><h2>Private group video.</h2><p>Host a private room or join with an invite code from someone you know.</p><p className="preview-note">Up to 4 people total. Invite-only test; not a public broadcast.</p></div>
-        <Video size={54}/>
-      </section>
+      <section className="feature-panel"><div><span className="welcome-pill"><Video size={13}/> GIST-UP LIVE</span><h2>Go live. Bring your people together.</h2><p>Public broadcasts, live viewers, chat and creator controls.</p><p className="preview-note">Free test capacity: 1 host + up to 4 viewers. Not unlimited streaming.</p></div><Video size={54}/></section>
       <section className="content-panel live-setup-panel">
-        <div className="section-title"><h2>Live setup</h2><span className="welcome-pill">4-PERSON TEST</span></div>
-        {!liveSession && <>
-          <label className="auth-label">Live title (optional)<input value={liveTitle} onChange={event=>setLiveTitle(event.target.value)} maxLength={100} placeholder="What would you like to talk about?"/></label>
-          <div className="live-preview-frame">
-            {liveStream ? <video className="live-camera-video" autoPlay muted playsInline ref={element=>{if(element&&element.srcObject!==liveStream)element.srcObject=liveStream;}}/> : <div className="live-preview-placeholder"><Video size={38}/><strong>Your camera preview will appear here</strong><span>Turn on camera before hosting or joining.</span></div>}
-            <span className={"live-preview-status "+(liveStream?"live-preview-ready":"")}>{liveStream?"CAMERA READY":"CAMERA OFF"}</span>
+        <div className="section-title"><h2>Public Live</h2><span className="welcome-pill">18+ HOSTS</span></div>
+        {!publicRoom ? <>
+          {liveEligibility?.eligible ? <div className="live-safety-note"><ShieldCheck size={17}/><span>18+ eligibility checked and current Live Rules accepted.</span></div>
+          : liveEligibility?.age_blocked ? <div className="empty-state-box"><Shield size={24}/><strong>Public hosting unavailable</strong><p>This account did not meet the 18+ hosting requirement. Eligible viewers can still watch Live broadcasts.</p></div>
+          : <div className="content-panel verification-policy"><h3>Public host requirements</h3><p>Creators must be at least 18 and accept the Live Rules. This is a self-declared age check, not government-ID verification. The full date is checked by the server and is not saved.</p>
+            <label className="auth-label">Date of birth<input type="date" value={liveBirthDate} max={new Date().toISOString().slice(0,10)} onChange={e=>setLiveBirthDate(e.target.value)}/></label>
+            <ul><li>No bullying, harassment, hate or threats.</li><li>No sexual content or promotion of dangerous or illegal activities.</li><li>Protect private information and do not impersonate others.</li><li>Only broadcast content you have permission to use.</li><li>No scams or deceptive promotions.</li></ul>
+            <label className="setting-row"><input type="checkbox" checked={liveRulesAccepted} onChange={e=>setLiveRulesAccepted(e.target.checked)}/><span>I confirm I meet the 18+ requirement and accept the Gist-Up Live Rules.</span></label>
+            <button className="primary-button" disabled={!liveBirthDate||!liveRulesAccepted||liveEligibilityBusy} onClick={submitLiveEligibility}>{liveEligibilityBusy?"Saving…":"Check eligibility and accept rules"}</button>
+            {liveEligibilityError&&<p className="auth-error">{liveEligibilityError}</p>}
+          </div>}
+          {liveEligibility?.eligible&&<>
+            <label className="auth-label">Broadcast title<input value={liveTitle} onChange={e=>setLiveTitle(e.target.value)} maxLength={100} placeholder="What are you going live about?"/></label>
+            <div className="live-preview-frame">{liveStream?<video className="live-camera-video" autoPlay muted playsInline ref={el=>{if(el&&el.srcObject!==liveStream)el.srcObject=liveStream;}}/>:<div className="live-preview-placeholder"><Video size={30}/><strong>Camera preview</strong><span>Turn on your camera before starting.</span></div>}</div>
+            <div className="live-setup-actions">{!liveStream?<button className="primary-button" onClick={prepareLiveCamera} disabled={liveCameraBusy}><Camera size={16}/>{liveCameraBusy?"Requesting…":"Turn on camera and microphone"}</button>:<button className="outline-button" onClick={stopLiveCamera}>Turn off camera</button>}<button className="primary-button" onClick={startPublicLive} disabled={!liveStream}>Start public Live</button></div>
+          </>}
+          <div className="section-title"><h3>Live now</h3><button className="outline-button compact" onClick={()=>fetch(API_BASE+"/api/public-live",{credentials:"include"}).then(r=>r.json()).then(d=>setPublicRooms(d.rooms||[])).catch(()=>{})}>Refresh</button></div>
+          {!publicRooms.length?<div className="empty-state-box"><Video size={24}/><strong>No public broadcasts right now</strong><p>When creators go live, they will appear here.</p></div>:<div className="live-broadcast-list">{publicRooms.map(room=><div className="live-broadcast-row" key={room.id}><div><strong>{room.title}</strong><p>{room.host_name||room.host_username} · {room.viewer_count||0} watching</p></div><button className="primary-button compact" onClick={()=>joinPublicLive(room)}>Watch Live</button></div>)}</div>}
+        </>:<>
+          <div className="live-session-card"><div className="section-title"><span className="welcome-pill">{publicRole==="host"?"YOU ARE LIVE":"WATCHING LIVE"}</span><strong>{publicViewers.length} watching</strong></div><h3>{publicRoom.title}</h3>
+            <div className="live-preview-frame">{publicRole==="host"&&liveStream?<video className="live-camera-video" autoPlay muted playsInline ref={el=>{if(el&&el.srcObject!==liveStream)el.srcObject=liveStream;}}/>:publicRemoteStream?<video className="live-camera-video" autoPlay playsInline ref={el=>{if(el&&el.srcObject!==publicRemoteStream)el.srcObject=publicRemoteStream;}}/>:<div className="live-preview-placeholder"><Video size={30}/><strong>{publicRole==="host"?"Your broadcast is live":"Connecting to creator…"}</strong></div>}</div>
+            <h4>Viewers</h4><div className="live-viewer-list">{publicViewers.map(person=><div className="live-viewer-row" key={person.id}><span>{person.full_name||person.username}</span>{publicRole==="host"&&<button className="outline-button compact" onClick={()=>moderatePublicLive("remove",person.id)}>Remove</button>}</div>)}</div>
+            <div className="live-chat-panel"><h4>Live chat</h4><div className="live-chat-messages">{publicMessages.map(msg=><p key={msg.id}><strong>{msg.full_name||msg.username||"Viewer"}:</strong> {msg.body}</p>)}</div>
+              {publicCommentsEnabled?<div className="live-chat-compose"><input value={publicMessageText} maxLength={300} onChange={e=>setPublicMessageText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")sendPublicMessage("comment");}} placeholder="Write a comment…"/><button className="primary-button compact" onClick={()=>sendPublicMessage("comment")} disabled={!publicMessageText.trim()}>Send</button></div>:<p>Comments are paused by the host.</p>}
+              <div className="live-reactions"><button className="outline-button compact" onClick={()=>sendPublicMessage("reaction","💜")}>💜</button><button className="outline-button compact" onClick={()=>sendPublicMessage("reaction","👏")}>👏</button><button className="outline-button compact" onClick={()=>sendPublicMessage("reaction","🔥")}>🔥</button></div>
+            </div>
+            {publicRole==="host"?<div className="live-controls"><button className="outline-button" onClick={()=>moderatePublicLive("comments",null,!publicCommentsEnabled)}>{publicCommentsEnabled?"Pause comments":"Enable comments"}</button><button className="outline-button" onClick={()=>leavePublicLive(true)}>End Live</button></div>:<button className="outline-button" onClick={()=>leavePublicLive(false)}>Leave Live</button>}
           </div>
-          <div className="live-setup-actions">
-            {!liveStream ? <button className="primary-button" onClick={prepareLiveCamera} disabled={liveCameraBusy}><Camera size={16}/>{liveCameraBusy?"Requesting permission…":"Turn on camera and microphone"}</button> : <button className="outline-button" onClick={stopLiveCamera}><X size={16}/> Turn off camera</button>}
-            <span className="muted">Each participant needs camera and microphone permission.</span>
-          </div>
-          <button className="primary-button" onClick={startPrivateLive} disabled={!liveStream}>Start private room</button>
-          <div className="live-join-box"><strong>Joining a private room?</strong><label className="auth-label">Invite code<input value={liveJoinCode} onChange={event=>setLiveJoinCode(event.target.value.toUpperCase().slice(0,8))} maxLength={8} placeholder="Enter 8-character code"/></label><button className="outline-button" onClick={joinPrivateLive} disabled={liveJoinCode.trim().length!==8||!liveStream}>Join private room</button></div>
         </>}
-        {liveSession && <div className="live-session-card">
-          <span className="welcome-pill">{liveRole==="host"?"YOU ARE HOSTING":"YOU ARE IN THE ROOM"}</span>
-          <h3>{liveSession.title}</h3>
-          {liveInviteCode && <div className="live-invite-code"><span>Share this private code with up to 3 people you trust</span><strong>{liveInviteCode}</strong><button className="outline-button compact" onClick={()=>navigator.clipboard?.writeText(liveInviteCode).then(()=>notify("Invite code copied."))}>Copy code</button></div>}
-          <p className="muted">Participants: {liveParticipants.length}/4 · Connection: {liveStatus==="connected"?"All connections ready":liveStatus==="waiting"?"Waiting for others…":liveStatus==="connection-limited"?"Some connections are limited":"Connecting…"}</p>
-          <div className="live-participant-grid">
-            {liveParticipants.map(person => {
-              const isSelf = String(person.id) === String(authUser?.id);
-              const stream = isSelf ? liveStream : liveRemoteStreams[String(person.id)];
-              return <div className="live-participant-tile" key={person.id}>
-                {stream ? <video className="live-camera-video" autoPlay muted={isSelf} playsInline ref={element=>{if(element&&element.srcObject!==stream)element.srcObject=stream;}}/> : <div className="live-preview-placeholder"><Video size={26}/><strong>{isSelf?"Your camera":"Connecting video…"}</strong></div>}
-                <span>{isSelf?"You":(person.full_name||person.username||"Participant")}</span>
-              </div>;
-            })}
-          </div>
-          <div className="live-setup-actions live-controls">
-            <button className="outline-button" onClick={toggleLiveMute}>{liveMuted?"Turn microphone on":"Mute microphone"}</button>
-            <button className="outline-button" onClick={toggleLiveCamera}>{liveCameraOff?"Turn camera on":"Turn camera off"}</button>
-          </div>
-          <button className="outline-button" onClick={endPrivateLive}>{liveRole==="host"?"End room for everyone":"Leave room"}</button>
-        </div>}
-        {liveCameraError&&<p className="auth-error" role="alert">{liveCameraError}</p>}
-        <div className="live-safety-note"><ShieldCheck size={17}/><span>Only share the invite code with people you trust. Keep personal information private. The host can end the room at any time.</span></div>
-        <p className="preview-note">This free-first test uses direct browser connections. Four-person video may be demanding on devices and internet connections; some networks may not connect. No paid relay or unlimited audience is included.</p>
+        {publicError&&<p className="auth-error" role="alert">{publicError}</p>}
+        <div className="live-safety-note"><ShieldCheck size={17}/><span>Hosts can pause comments, remove viewers and end broadcasts. Keep personal information private.</span></div>
+        <p className="preview-note">Free-first WebRTC test, capped at four viewers per creator. Direct browser connections can fail on some networks. No unlimited audience or production-scale streaming is included.</p>
+      </section>
+      <section className="content-panel live-setup-panel"><div className="section-title"><h2>Private group video</h2><span className="welcome-pill">4-PERSON TEST</span></div>
+        {!liveSession?<><label className="auth-label">Private room title<input value={liveTitle} onChange={e=>setLiveTitle(e.target.value)} maxLength={100}/></label><button className="outline-button" onClick={prepareLiveCamera} disabled={liveCameraBusy||!!liveStream}>{liveStream?"Camera ready":liveCameraBusy?"Requesting…":"Turn on camera and microphone"}</button><button className="outline-button" onClick={startPrivateLive} disabled={!liveStream}>Start private room</button><div className="live-join-box"><label className="auth-label">Invite code<input value={liveJoinCode} onChange={e=>setLiveJoinCode(e.target.value.toUpperCase().slice(0,8))} maxLength={8}/></label><button className="outline-button" onClick={joinPrivateLive} disabled={liveJoinCode.trim().length!==8||!liveStream}>Join private room</button></div></>:<div className="live-session-card"><h3>{liveSession.title}</h3><p>Participants: {liveParticipants.length}/4</p><div className="live-participant-grid">{liveParticipants.map(person=>{const self=String(person.id)===String(authUser?.id);const stream=self?liveStream:liveRemoteStreams[String(person.id)];return <div className="live-participant-tile" key={person.id}>{stream?<video className="live-camera-video" autoPlay muted={self} playsInline ref={el=>{if(el&&el.srcObject!==stream)el.srcObject=stream;}}/>:<span>Connecting…</span>}<span>{self?"You":person.full_name||person.username}</span></div>;})}</div><button className="outline-button" onClick={endPrivateLive}>{liveRole==="host"?"End private room":"Leave private room"}</button></div>}
+        {liveCameraError&&<p className="auth-error">{liveCameraError}</p>}
       </section>
     </div>;
   }
