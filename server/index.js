@@ -247,6 +247,14 @@ app.post("/api/live/eligibility", authenticate, liveLimiter, async (req, res) =>
   if (birthdayNotReached) age -= 1;
   const eligible = age >= 18;
   try {
+    const previousCheck = await pool.query(
+      "SELECT live_host_eligible, live_age_checked_at FROM users WHERE id = $1 LIMIT 1",
+      [req.user.id]
+    );
+    if (!previousCheck.rowCount) return res.status(404).json({ error: "Account not found." });
+    if (previousCheck.rows[0].live_age_checked_at && previousCheck.rows[0].live_host_eligible === false) {
+      return res.status(403).json({ error: "Public Live hosting is unavailable for this account. Contact Gist-Up support if you believe this check was incorrect." });
+    }
     const result = await pool.query(
       `UPDATE users
        SET live_host_eligible = $1, live_age_checked_at = NOW(),
