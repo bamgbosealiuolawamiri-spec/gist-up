@@ -1459,11 +1459,11 @@ function App() {
     const r = await fetch(API_BASE + "/api/public-live/" + encodeURIComponent(roomId) + "/signals", { method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body:JSON.stringify({recipientUserId:targetId,type,payload}) });
     const d = await r.json().catch(()=>({})); if (!r.ok) throw new Error(d.error || "Live video connection failed."); return d;
   }
-  function createPublicPeer(room, person, shouldOffer) {
+  function createPublicPeer(room, person, shouldOffer, role) {
     const id=String(person.id); if(publicPeerRef.current.has(id)) return publicPeerRef.current.get(id);
     const pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]});
     publicPeerRef.current.set(id,pc);
-    if(publicRole==="host" && liveStream) liveStream.getTracks().forEach(track=>pc.addTrack(track,liveStream));
+    if(role==="host" && liveStream) liveStream.getTracks().forEach(track=>pc.addTrack(track,liveStream));
     pc.onicecandidate=e=>{if(e.candidate)sendPublicSignal(room.id,id,"ice",e.candidate.toJSON()).catch(err=>setPublicError(err.message));};
     pc.ontrack=e=>setPublicRemoteStream(e.streams?.[0]||new MediaStream([e.track]));
     if(shouldOffer) (async()=>{try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);await sendPublicSignal(room.id,id,"offer",pc.localDescription);}catch(e){setPublicError(e.message||"Couldn't start the video connection.");}})();
@@ -1480,11 +1480,11 @@ function App() {
         if(!r.ok)throw new Error(d.error||"This broadcast is no longer available.");
         setPublicViewers(d.viewers||[]);setPublicCommentsEnabled(d.room?.comments_enabled!==false);
         if(d.messages?.length){setPublicMessages(old=>[...old,...d.messages].slice(-80));publicMessageCursorRef.current=Math.max(publicMessageCursorRef.current,...d.messages.map(x=>Number(x.id)||0));}
-        if(role==="host")for(const person of (d.viewers||[]))if(!publicPeerRef.current.has(String(person.id)))createPublicPeer(room,person,true);
+        if(role==="host")for(const person of (d.viewers||[]))if(!publicPeerRef.current.has(String(person.id)))createPublicPeer(room,person,true,role);
         for(const signal of (d.signals||[])){
           publicSignalCursorRef.current=Math.max(publicSignalCursorRef.current,Number(signal.id)||0);
           const sender=role==="host"?(d.viewers||[]).find(x=>String(x.id)===String(signal.sender_user_id)):{id:room.host_user_id};
-          if(!sender)continue;const pc=createPublicPeer(room,sender,false);
+          if(!sender)continue;const pc=createPublicPeer(room,sender,false,role);
           if(signal.signal_type==="ice"){if(pc.remoteDescription){try{await pc.addIceCandidate(new RTCIceCandidate(signal.payload));}catch{}}}
           if(signal.signal_type==="offer"&&!pc.remoteDescription){await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));const answer=await pc.createAnswer();await pc.setLocalDescription(answer);await sendPublicSignal(room.id,sender.id,"answer",pc.localDescription);}
           if(signal.signal_type==="answer"&&!pc.remoteDescription)await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
