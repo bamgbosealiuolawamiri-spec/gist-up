@@ -304,7 +304,7 @@ app.post("/api/live/sessions/:id/signals", authenticate, liveLimiter, async (req
   const payload = req.body?.payload;
   const recipientUserId = String(req.body?.recipientUserId || "");
   if (!allowed.includes(signalType)) return res.status(400).json({ error: "Unsupported connection signal." });
-  if (!/^\d+$/.test(recipientUserId) || !payload || typeof payload !== "object" || JSON.stringify(payload).length > 20000) {
+  if (!/^\d+$/.test(recipientUserId) || !payload || typeof payload !== "object" || JSON.stringify(payload).length > 100000) {
     return res.status(400).json({ error: "Invalid private connection signal." });
   }
   try {
