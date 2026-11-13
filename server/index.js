@@ -415,6 +415,7 @@ app.post("/api/public-live", authenticate, liveLimiter, async (req, res) => {
     const check = await pool.query("SELECT live_host_eligible, live_rules_version, live_rules_accepted_at FROM users WHERE id = $1", [req.user.id]);
     const row = check.rows[0];
     if (!row || row.live_host_eligible !== true || row.live_rules_version !== LIVE_RULES_VERSION || !row.live_rules_accepted_at) return res.status(403).json({ error: "Public Live hosting requires an 18+ eligibility check and acceptance of the current Live Rules." });
+    await pool.query("UPDATE public_live_rooms SET status='ended', ended_at=NOW() WHERE host_user_id=$1 AND status='active' AND last_seen_at < NOW() - INTERVAL '45 seconds'", [req.user.id]);
     const active = await pool.query("SELECT id FROM public_live_rooms WHERE host_user_id = $1 AND status = 'active'", [req.user.id]);
     if (active.rowCount) return res.status(409).json({ error: "You already have an active public broadcast." });
     const result = await pool.query("INSERT INTO public_live_rooms (host_user_id, title) VALUES ($1, $2) RETURNING id, title, status, created_at", [req.user.id, title]);
