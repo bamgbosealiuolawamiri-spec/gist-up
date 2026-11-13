@@ -101,6 +101,11 @@ function App() {
   const [assistantModel, setAssistantModel] = useState("");
   const [authUser, setAuthUser] = useState(null);
   const [liveTitle, setLiveTitle] = useState("");
+  const [liveBirthDate, setLiveBirthDate] = useState("");
+  const [liveRulesAccepted, setLiveRulesAccepted] = useState(false);
+  const [liveEligibility, setLiveEligibility] = useState(null);
+  const [liveEligibilityBusy, setLiveEligibilityBusy] = useState(false);
+  const [liveEligibilityError, setLiveEligibilityError] = useState("");
   const [liveStream, setLiveStream] = useState(null);
   const [liveCameraBusy, setLiveCameraBusy] = useState(false);
   const [liveCameraError, setLiveCameraError] = useState("");
@@ -111,6 +116,12 @@ function App() {
   const [liveStatus, setLiveStatus] = useState("idle");
   const [liveParticipants, setLiveParticipants] = useState([]);
   const [liveRemoteStreams, setLiveRemoteStreams] = useState({});
+  useEffect(() => {
+    if (!authUser?.id) { setLiveEligibility(null); return; }
+    fetch(API_BASE + "/api/live/eligibility", { credentials: "include" })
+      .then(async response => { const data = await response.json().catch(() => ({})); if (response.ok) setLiveEligibility(data.eligibility || null); })
+      .catch(() => {});
+  }, [authUser?.id]);
   const [liveMuted, setLiveMuted] = useState(false);
   const [liveCameraOff, setLiveCameraOff] = useState(false);
   const peerConnectionsRef = useRef(new Map());
@@ -1402,6 +1413,27 @@ function App() {
       } finally { livePollBusyRef.current = false; }
     }, 1800);
   }
+  async function submitLiveEligibility() {
+    setLiveEligibilityError("");
+    if (!liveBirthDate) { setLiveEligibilityError("Enter your date of birth to check whether you meet the 18+ requirement."); return; }
+    if (!liveRulesAccepted) { setLiveEligibilityError("Please read and accept the Gist-Up Live rules first."); return; }
+    setLiveEligibilityBusy(true);
+    try {
+      const response = await fetch(API_BASE + "/api/live/eligibility", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dateOfBirth: liveBirthDate, acceptedRules: true })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "We couldn't save your Live eligibility check.");
+      setLiveEligibility(data.eligibility || null);
+      setLiveBirthDate("");
+      notify(data.eligibility?.eligible ? "You meet the age requirement and accepted the Live rules." : "Public Live hosting is unavailable for this account.");
+    } catch (error) {
+      setLiveEligibilityError(error.message || "We couldn't save your Live eligibility check.");
+    } finally { setLiveEligibilityBusy(false); }
+  }
+
   async function startPrivateLive() {
     if (!liveStream) { setLiveCameraError("Turn on your camera and microphone first."); return; }
     setLiveCameraError("");
@@ -1478,6 +1510,34 @@ function App() {
       <section className="feature-panel">
         <div><span className="welcome-pill"><Video size={13}/> GIST-UP LIVE</span><h2>Private group video.</h2><p>Host a private room or join with an invite code from someone you know.</p><p className="preview-note">Up to 4 people total. Invite-only test; not a public broadcast.</p></div>
         <Video size={54}/>
+      </section>
+      <section className="content-panel live-setup-panel">
+        <div className="section-title"><h2>Public Live access</h2><span className="welcome-pill">18+ REQUIREMENT</span></div>
+        {liveEligibility?.eligible ? <div className="empty-state-box"><ShieldCheck size={26}/><strong>Age requirement checked and rules accepted</strong><p>Your public Live eligibility record is saved. Public broadcasting is still being built and is not available yet.</p></div>
+        : liveEligibility?.age_blocked ? <div className="empty-state-box"><Shield size={26}/><strong>Public Live hosting unavailable</strong><p>Our check indicates this account does not meet the 18+ hosting requirement. Gist-Up does not store your date of birth.</p></div>
+        : <>
+          <p className="muted">Before public broadcasting launches, creators must confirm they are at least 18 and accept the safety rules.</p>
+          <label className="auth-label">Date of birth<input type="date" value={liveBirthDate} max={new Date().toISOString().slice(0,10)} onChange={event=>setLiveBirthDate(event.target.value)}/></label>
+          <div className="content-panel verification-policy">
+            <h3>Gist-Up Live Rules</h3>
+            <ul>
+              <li>You must be at least 18 to host a public Live broadcast.</li>
+              <li>Do not bully, harass, threaten or target people with hate.</li>
+              <li>Do not show sexual content or promote dangerous or illegal activities.</li>
+              <li>Do not share another person's private information without permission.</li>
+              <li>Respect copyright and only broadcast content you have permission to use.</li>
+              <li>Do not use Live to scam, impersonate, or mislead viewers.</li>
+              <li>Gist-Up may end a broadcast or restrict Live access when rules are broken. You can appeal a moderation decision.</li>
+            </ul>
+            <p className="preview-note">This is a self-declared age check, not government-ID verification. Your full date of birth is checked by the server and is not saved.</p>
+          </div>
+          <label className="setting-row" style={{alignItems:"flex-start",gap:"12px"}}>
+            <input type="checkbox" checked={liveRulesAccepted} onChange={event=>setLiveRulesAccepted(event.target.checked)} style={{width:"18px",height:"18px",marginTop:"3px"}}/>
+            <span>I confirm that I am at least 18 years old if eligible, have read the Gist-Up Live Rules, and agree to follow them.</span>
+          </label>
+          <button className="primary-button" onClick={submitLiveEligibility} disabled={liveEligibilityBusy||!liveBirthDate||!liveRulesAccepted}>{liveEligibilityBusy?"Saving…":"Check eligibility and accept rules"} <ArrowRight size={16}/></button>
+          {liveEligibilityError&&<p className="auth-error" role="alert">{liveEligibilityError}</p>}
+        </>}
       </section>
       <section className="content-panel live-setup-panel">
         <div className="section-title"><h2>Live setup</h2><span className="welcome-pill">4-PERSON TEST</span></div>
