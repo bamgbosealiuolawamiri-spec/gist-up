@@ -358,6 +358,144 @@ app.delete("/api/live/sessions/:id", authenticate, liveLimiter, async (req, res)
   }
 });
 
+
+const LIVE_RULES_VERSION = "2026-11-13";
+async function getPublicLiveRoom(roomId) {
+  const result = await pool.query(
+    "SELECT r.*, u.full_name AS host_name, u.username AS host_username, u.avatar_url AS host_avatar FROM public_live_rooms r JOIN users u ON u.id = r.host_user_id WHERE r.id = $1 AND r.status = 'active' LIMIT 1",
+    [roomId]
+  );
+  return result.rows[0] || null;
+}
+async function getPublicLiveViewers(roomId) {
+  const result = await pool.query(
+    `SELECT v.user_id AS id, u.full_name, u.username, u.avatar_url
+     FROM public_live_viewers v JOIN users u ON u.id = v.user_id
+     WHERE v.room_id = $1 AND v.removed_at IS NULL AND v.last_seen_at > NOW() - INTERVAL '45 seconds'
+     ORDER BY v.joined_at ASC`, [roomId]
+  );
+  return result.rows;
+}
+app.get("/api/live/eligibility", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query("SELECT live_host_eligible, live_age_checked_at, live_rules_version, live_rules_accepted_at FROM users WHERE id = $1", [req.user.id]);
+    const row = result.rows[0];
+    res.json({ eligibility: { eligible: row?.live_host_eligible === true && row?.live_rules_version === LIVE_RULES_VERSION && Boolean(row?.live_rules_accepted_at), age_blocked: row?.live_host_eligible === false && Boolean(row?.live_age_checked_at) } });
+  } catch (error) { console.error("Live eligibility lookup failed:", error?.message || error); res.status(500).json({ error: "Couldn't check Live eligibility." }); }
+});
+app.post("/api/live/eligibility", authenticate, liveLimiter, async (req, res) => {
+  const dob = String(req.body?.dateOfBirth || "");
+  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(dob) || req.body?.acceptedRules !== true) return res.status(400).json({ error: "Enter a valid date and accept the Live Rules." });
+  const [y, m, d] = dob.split("-").map(Number);
+  const birth = new Date(Date.UTC(y, m - 1, d)); const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  if (birth.getUTCFullYear() !== y || birth.getUTCMonth() !== m - 1 || birth.getUTCDate() !== d || birth > today) return res.status(400).json({ error: "Enter a real date that is not in the future." });
+  let age = today.getUTCFullYear() - y;
+  if (today.getUTCMonth() < m - 1 || (today.getUTCMonth() === m - 1 && today.getUTCDate() < d)) age--;
+  const eligible = age >= 18;
+  try {
+    const old = await pool.query("SELECT live_age_checked_at, live_host_eligible FROM users WHERE id = $1", [req.user.id]);
+    if (!old.rowCount) return res.status(404).json({ error: "Account not found." });
+    if (old.rows[0].live_age_checked_at && old.rows[0].live_host_eligible === false) return res.status(403).json({ error: "Public Live hosting is unavailable for this account. Contact Gist-Up support if this check was incorrect." });
+    await pool.query("UPDATE users SET live_host_eligible = $1, live_age_checked_at = NOW(), live_rules_version = $2, live_rules_accepted_at = NOW() WHERE id = $3", [eligible, LIVE_RULES_VERSION, req.user.id]);
+    res.json({ eligibility: { eligible, age_blocked: !eligible } });
+  } catch (error) { console.error("Live eligibility save failed:", error?.message || error); res.status(500).json({ error: "Couldn't save Live eligibility." }); }
+});
+app.get("/api/public-live", authenticate, async (_req, res) => {
+  try {
+    const result = await pool.query(`SELECT r.id, r.title, r.created_at, u.full_name AS host_name, u.username AS host_username,
+      (SELECT COUNT(*)::int FROM public_live_viewers v WHERE v.room_id = r.id AND v.removed_at IS NULL AND v.last_seen_at > NOW() - INTERVAL '45 seconds') AS viewer_count
+      FROM public_live_rooms r JOIN users u ON u.id = r.host_user_id WHERE r.status = 'active' ORDER BY r.created_at DESC LIMIT 30`);
+    res.json({ rooms: result.rows });
+  } catch (error) { console.error("Public Live list failed:", error?.message || error); res.status(500).json({ error: "Couldn't load Live broadcasts." }); }
+});
+app.post("/api/public-live", authenticate, liveLimiter, async (req, res) => {
+  const title = String(req.body?.title || "").trim().slice(0, 100) || "Gist-Up Live";
+  try {
+    const check = await pool.query("SELECT live_host_eligible, live_rules_version, live_rules_accepted_at FROM users WHERE id = $1", [req.user.id]);
+    const row = check.rows[0];
+    if (!row || row.live_host_eligible !== true || row.live_rules_version !== LIVE_RULES_VERSION || !row.live_rules_accepted_at) return res.status(403).json({ error: "Public Live hosting requires an 18+ eligibility check and acceptance of the current Live Rules." });
+    const active = await pool.query("SELECT id FROM public_live_rooms WHERE host_user_id = $1 AND status = 'active'", [req.user.id]);
+    if (active.rowCount) return res.status(409).json({ error: "You already have an active public broadcast." });
+    const result = await pool.query("INSERT INTO public_live_rooms (host_user_id, title) VALUES ($1, $2) RETURNING id, title, status, created_at", [req.user.id, title]);
+    res.status(201).json({ room: result.rows[0], role: "host" });
+  } catch (error) { console.error("Public Live start failed:", error?.message || error); res.status(500).json({ error: "Couldn't start public Live." }); }
+});
+app.post("/api/public-live/:id/join", authenticate, liveLimiter, async (req, res) => {
+  try {
+    const room = await getPublicLiveRoom(req.params.id);
+    if (!room) return res.status(404).json({ error: "This broadcast has ended." });
+    if (String(room.host_user_id) === String(req.user.id)) return res.status(400).json({ error: "You are hosting this broadcast." });
+    const old = await pool.query("SELECT removed_at FROM public_live_viewers WHERE room_id = $1 AND user_id = $2", [room.id, req.user.id]);
+    if (old.rows[0]?.removed_at) return res.status(403).json({ error: "The host removed you from this broadcast." });
+    const count = await pool.query("SELECT COUNT(*)::int AS count FROM public_live_viewers WHERE room_id = $1 AND removed_at IS NULL AND last_seen_at > NOW() - INTERVAL '45 seconds'", [room.id]);
+    if (!old.rowCount && count.rows[0].count >= 4) return res.status(409).json({ error: "This free test broadcast is full (4 viewers)." });
+    await pool.query("INSERT INTO public_live_viewers (room_id, user_id) VALUES ($1, $2) ON CONFLICT (room_id,user_id) DO UPDATE SET joined_at=NOW(),last_seen_at=NOW()", [room.id, req.user.id]);
+    res.json({ room: { id: room.id, title: room.title, host_user_id: room.host_user_id, host_name: room.host_name }, role: "viewer" });
+  } catch (error) { console.error("Public Live join failed:", error?.message || error); res.status(500).json({ error: "Couldn't join this broadcast." }); }
+});
+app.get("/api/public-live/:id/state", authenticate, liveLimiter, async (req, res) => {
+  try {
+    const room = await getPublicLiveRoom(req.params.id);
+    if (!room) return res.status(404).json({ error: "This broadcast has ended." });
+    const host = String(room.host_user_id) === String(req.user.id);
+    if (!host) {
+      const active = await pool.query("UPDATE public_live_viewers SET last_seen_at=NOW() WHERE room_id=$1 AND user_id=$2 AND removed_at IS NULL RETURNING user_id", [room.id, req.user.id]);
+      if (!active.rowCount) return res.status(403).json({ error: "You are not an active viewer." });
+    }
+    const [viewers, messages, signals] = await Promise.all([
+      getPublicLiveViewers(room.id),
+      pool.query("SELECT m.id,m.message_type,m.body,m.created_at,u.id AS user_id,u.full_name,u.username FROM public_live_messages m JOIN users u ON u.id=m.user_id WHERE m.room_id=$1 AND m.id>$2 ORDER BY m.id LIMIT 80", [room.id, Math.max(0,Number(req.query.afterMessage)||0)]),
+      pool.query("SELECT id,sender_user_id,signal_type,payload FROM public_live_signals WHERE room_id=$1 AND recipient_user_id=$2 AND id>$3 ORDER BY id LIMIT 100", [room.id, req.user.id, Math.max(0,Number(req.query.afterSignal)||0)])
+    ]);
+    res.json({ room: { id: room.id,title: room.title,host_user_id: room.host_user_id,host_name: room.host_name,comments_enabled: room.comments_enabled }, viewers, messages: messages.rows, signals: signals.rows });
+  } catch (error) { console.error("Public Live state failed:", error?.message || error); res.status(500).json({ error: "Couldn't refresh the broadcast." }); }
+});
+app.post("/api/public-live/:id/signals", authenticate, liveLimiter, async (req, res) => {
+  const type = String(req.body?.type || ""), target = String(req.body?.recipientUserId || ""), payload = req.body?.payload;
+  if (!["offer","answer","ice"].includes(type) || !/^\\d+$/.test(target) || !payload || typeof payload !== "object" || JSON.stringify(payload).length > 100000) return res.status(400).json({ error: "Invalid Live connection signal." });
+  try {
+    const room = await getPublicLiveRoom(req.params.id); if (!room) return res.status(404).json({ error: "Broadcast ended." });
+    const host = String(room.host_user_id) === String(req.user.id);
+    const active = host ? true : (await pool.query("SELECT 1 FROM public_live_viewers WHERE room_id=$1 AND user_id=$2 AND removed_at IS NULL", [room.id,req.user.id])).rowCount > 0;
+    if (!active) return res.status(403).json({ error: "You are not in this broadcast." });
+    const targetOk = target === String(room.host_user_id) ? !host : host && (await pool.query("SELECT 1 FROM public_live_viewers WHERE room_id=$1 AND user_id=$2 AND removed_at IS NULL", [room.id,target])).rowCount > 0;
+    if (!targetOk || target === String(req.user.id)) return res.status(403).json({ error: "That viewer is not available." });
+    const result = await pool.query("INSERT INTO public_live_signals (room_id,sender_user_id,recipient_user_id,signal_type,payload) VALUES ($1,$2,$3,$4,$5::jsonb) RETURNING id", [room.id,req.user.id,target,type,JSON.stringify(payload)]);
+    res.status(201).json({ id: result.rows[0].id });
+  } catch (error) { console.error("Public Live signal failed:", error?.message || error); res.status(500).json({ error: "Couldn't send video signal." }); }
+});
+app.post("/api/public-live/:id/messages", authenticate, liveLimiter, async (req, res) => {
+  const type=String(req.body?.type||"comment"), body=String(req.body?.body||"").trim();
+  if (!["comment","reaction"].includes(type)||!body||body.length>300) return res.status(400).json({error:"Enter a valid comment or reaction."});
+  try {
+    const room=await getPublicLiveRoom(req.params.id); if(!room)return res.status(404).json({error:"Broadcast ended."});
+    const host=String(room.host_user_id)===String(req.user.id);
+    const member=host||(await pool.query("SELECT 1 FROM public_live_viewers WHERE room_id=$1 AND user_id=$2 AND removed_at IS NULL",[room.id,req.user.id])).rowCount>0;
+    if(!member)return res.status(403).json({error:"Join the broadcast first."});
+    if(type==="comment"&&!room.comments_enabled)return res.status(403).json({error:"Comments are paused by the host."});
+    const result=await pool.query("INSERT INTO public_live_messages (room_id,user_id,message_type,body) VALUES ($1,$2,$3,$4) RETURNING id,message_type,body,created_at",[room.id,req.user.id,type,body]);
+    res.status(201).json({message:{...result.rows[0],user_id:req.user.id,full_name:req.user.full_name,username:req.user.username}});
+  } catch(error){console.error("Public Live message failed:",error?.message||error);res.status(500).json({error:"Couldn't send that interaction."});}
+});
+app.post("/api/public-live/:id/moderation", authenticate, liveLimiter, async (req,res)=>{
+  const action=String(req.body?.action||""), target=String(req.body?.userId||"");
+  try{
+    const room=await getPublicLiveRoom(req.params.id);
+    if(!room||String(room.host_user_id)!==String(req.user.id))return res.status(403).json({error:"Only the host can moderate this broadcast."});
+    if(action==="comments"){const enabled=req.body?.enabled===true;await pool.query("UPDATE public_live_rooms SET comments_enabled=$1 WHERE id=$2",[enabled,room.id]);return res.json({ok:true,comments_enabled:enabled});}
+    if(action==="remove"&&/^\\d+$/.test(target)&&target!==String(req.user.id)){const result=await pool.query("UPDATE public_live_viewers SET removed_at=NOW() WHERE room_id=$1 AND user_id=$2 AND removed_at IS NULL RETURNING user_id",[room.id,target]);if(!result.rowCount)return res.status(404).json({error:"Viewer not found."});return res.json({ok:true});}
+    res.status(400).json({error:"Unsupported moderation action."});
+  }catch(error){console.error("Public Live moderation failed:",error?.message||error);res.status(500).json({error:"Moderation action failed."});}
+});
+app.delete("/api/public-live/:id", authenticate, liveLimiter, async (req,res)=>{
+  try{const result=await pool.query("UPDATE public_live_rooms SET status='ended',ended_at=NOW() WHERE id=$1 AND host_user_id=$2 AND status='active' RETURNING id",[req.params.id,req.user.id]);if(!result.rowCount)return res.status(404).json({error:"Broadcast already ended."});res.json({ok:true});}
+  catch(error){console.error("Public Live end failed:",error?.message||error);res.status(500).json({error:"Couldn't end broadcast."});}
+});
+app.delete("/api/public-live/:id/leave", authenticate, liveLimiter, async (req,res)=>{
+  try{await pool.query("UPDATE public_live_viewers SET last_seen_at=NOW()-INTERVAL '2 minutes' WHERE room_id=$1 AND user_id=$2",[req.params.id,req.user.id]);res.json({ok:true});}
+  catch(error){res.status(500).json({error:"Couldn't leave broadcast."});}
+});
 app.get("/api/health", async (_req, res) => {
   let database = "not configured";
   if (pool) {
@@ -1609,6 +1747,10 @@ async function start() {
       await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users (username)");
 
       await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT FALSE");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS live_host_eligible BOOLEAN NOT NULL DEFAULT FALSE");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS live_age_checked_at TIMESTAMPTZ");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS live_rules_version VARCHAR(30)");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS live_rules_accepted_at TIMESTAMPTZ");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS verification_applications (
           id BIGSERIAL PRIMARY KEY,
@@ -1827,6 +1969,36 @@ async function start() {
       await pool.query("ALTER TABLE live_signals ADD COLUMN IF NOT EXISTS recipient_user_id BIGINT REFERENCES users(id) ON DELETE CASCADE");
       await pool.query("CREATE INDEX IF NOT EXISTS live_signals_session_idx ON live_signals (session_id, id)");
       await pool.query("CREATE INDEX IF NOT EXISTS live_signals_recipient_idx ON live_signals (session_id, recipient_user_id, id)");
+
+
+      await pool.query(`CREATE TABLE IF NOT EXISTS public_live_rooms (
+        id BIGSERIAL PRIMARY KEY, host_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title VARCHAR(100) NOT NULL DEFAULT 'Gist-Up Live',
+        status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active','ended')),
+        comments_enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), ended_at TIMESTAMPTZ
+      )`);
+      await pool.query("CREATE INDEX IF NOT EXISTS public_live_rooms_active_idx ON public_live_rooms (status, created_at DESC)");
+      await pool.query(`CREATE TABLE IF NOT EXISTS public_live_viewers (
+        room_id BIGINT NOT NULL REFERENCES public_live_rooms(id) ON DELETE CASCADE,
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        removed_at TIMESTAMPTZ, PRIMARY KEY (room_id, user_id)
+      )`);
+      await pool.query(`CREATE TABLE IF NOT EXISTS public_live_messages (
+        id BIGSERIAL PRIMARY KEY, room_id BIGINT NOT NULL REFERENCES public_live_rooms(id) ON DELETE CASCADE,
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        message_type VARCHAR(12) NOT NULL CHECK (message_type IN ('comment','reaction')),
+        body VARCHAR(300) NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`);
+      await pool.query("CREATE INDEX IF NOT EXISTS public_live_messages_room_idx ON public_live_messages (room_id, id)");
+      await pool.query(`CREATE TABLE IF NOT EXISTS public_live_signals (
+        id BIGSERIAL PRIMARY KEY, room_id BIGINT NOT NULL REFERENCES public_live_rooms(id) ON DELETE CASCADE,
+        sender_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        recipient_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        signal_type VARCHAR(10) NOT NULL CHECK (signal_type IN ('offer','answer','ice')),
+        payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`);
+      await pool.query("CREATE INDEX IF NOT EXISTS public_live_signals_recipient_idx ON public_live_signals (room_id, recipient_user_id, id)");
 
       console.log("Gist Up database schema is ready.");
     } catch (error) {
