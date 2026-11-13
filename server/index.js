@@ -238,9 +238,9 @@ app.post("/api/live/sessions/join", authenticate, liveLimiter, async (req, res) 
     if (!found.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ error: "That invite code is invalid or expired." }); }
     const session = found.rows[0];
     if (String(session.host_user_id) === String(req.user.id)) { await client.query("ROLLBACK"); return res.status(400).json({ error: "The host is already in this room." }); }
-    const existing = await client.query("SELECT left_at FROM live_participants WHERE session_id = $1 AND user_id = $2", [session.id, req.user.id]);
+    const existing = await client.query("SELECT left_at, (last_seen_at < NOW() - INTERVAL '90 seconds') AS stale FROM live_participants WHERE session_id = $1 AND user_id = $2", [session.id, req.user.id]);
     const count = await client.query("SELECT COUNT(*)::int AS count FROM live_participants WHERE session_id = $1 AND left_at IS NULL AND last_seen_at > NOW() - INTERVAL '90 seconds'", [session.id]);
-    if ((!existing.rowCount || existing.rows[0].left_at) && Number(count.rows[0].count) >= 4) {
+    if ((!existing.rowCount || existing.rows[0].left_at || existing.rows[0].stale) && Number(count.rows[0].count) >= 4) {
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "This private room is full. It supports up to 4 people." });
     }
