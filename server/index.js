@@ -180,10 +180,10 @@ app.post("/api/admin/email-test", authenticate, authLimiter, async (req, res) =>
 });
 
 
-const liveLimiter = rateLimit({ windowMs: 60 * 1000, limit: 180, standardHeaders: "draft-7", legacyHeaders: false });
+const liveLimiter = rateLimit({ windowMs: 60 * 1000, limit: 300, standardHeaders: "draft-7", legacyHeaders: false });
 async function getLiveParticipant(sessionId, userId) {
   const result = await pool.query(
-    `SELECT s.id, s.host_user_id, s.status, s.expires_at
+    `SELECT s.id, s.host_user_id, s.status, s.expires_at, p.joined_at
      FROM live_sessions s
      JOIN live_participants p ON p.session_id = s.id AND p.user_id = $2 AND p.left_at IS NULL
      WHERE s.id = $1 AND s.status = 'active' AND s.expires_at > NOW() LIMIT 1`,
@@ -264,8 +264,8 @@ app.get("/api/live/sessions/:id/signals", authenticate, liveLimiter, async (req,
     const after = Math.max(0, Number.parseInt(req.query.after || "0", 10) || 0);
     const [signals, participants] = await Promise.all([
       pool.query(
-        "SELECT id, sender_user_id, signal_type, payload FROM live_signals WHERE session_id = $1 AND recipient_user_id = $2 AND id > $3 ORDER BY id ASC LIMIT 100",
-        [session.id, req.user.id, after]
+        "SELECT id, sender_user_id, signal_type, payload FROM live_signals WHERE session_id = $1 AND recipient_user_id = $2 AND created_at >= $3 AND id > $4 ORDER BY id ASC LIMIT 100",
+        [session.id, req.user.id, session.joined_at, after]
       ),
       getLiveRoster(session.id)
     ]);
