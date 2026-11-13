@@ -183,3 +183,17 @@
 .live-participant-tile>span{position:absolute;left:10px;bottom:10px;padding:5px 9px;border-radius:20px;background:rgba(20,15,28,.78);color:#fff;font-size:12px}
 .live-controls{display:flex;flex-wrap:wrap;gap:10px}
 @media(max-width:560px){.live-participant-grid{grid-template-columns:1fr}.live-participant-tile,.live-participant-tile .live-camera-video,.live-participant-tile .live-preview-placeholder{min-height:210px}}
+
+
+/* Public Gist-Up Live audience experience */
+.live-broadcast-list{display:grid;gap:10px}
+.live-broadcast-row,.live-viewer-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid var(--border,#e7e1f2);border-radius:12px}
+.live-broadcast-row p{margin:5px 0 0;color:var(--muted,#777)}
+.live-viewer-list{display:grid;gap:8px;margin:10px 0 18px}
+.live-chat-panel{display:grid;gap:10px;margin-top:18px;padding:14px;border:1px solid var(--border,#e7e1f2);border-radius:14px}
+.live-chat-messages{display:grid;gap:7px;max-height:230px;overflow:auto}
+.live-chat-messages p{margin:0;padding:8px 10px;border-radius:10px;background:rgba(109,40,217,.06);overflow-wrap:anywhere}
+.live-chat-compose{display:flex;gap:8px}
+.live-chat-compose input{min-width:0;flex:1;padding:11px 12px;border:1px solid var(--border,#ddd);border-radius:10px;background:transparent;color:inherit}
+.live-reactions{display:flex;gap:8px}
+@media(max-width:560px){.live-broadcast-row{align-items:flex-start;flex-direction:column}.live-chat-compose{flex-wrap:wrap}.live-chat-compose button{width:100%}}
