@@ -203,6 +203,73 @@ async function getLiveRoster(sessionId) {
   return result.rows;
 }
 
+
+const LIVE_RULES_VERSION = "2026-11-13";
+
+app.get("/api/live/eligibility", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT live_host_eligible, live_age_checked_at, live_rules_version, live_rules_accepted_at FROM users WHERE id = $1 LIMIT 1",
+      [req.user.id]
+    );
+    const row = result.rows[0];
+    if (!row) return res.status(404).json({ error: "Account not found." });
+    return res.json({ eligibility: {
+      eligible: row.live_host_eligible === true && row.live_rules_version === LIVE_RULES_VERSION && Boolean(row.live_rules_accepted_at),
+      age_blocked: row.live_host_eligible === false && Boolean(row.live_age_checked_at),
+      age_checked_at: row.live_age_checked_at,
+      rules_version: row.live_rules_version,
+      rules_accepted_at: row.live_rules_accepted_at
+    } });
+  } catch (error) {
+    console.error("Live eligibility lookup failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't check Live eligibility right now." });
+  }
+});
+
+app.post("/api/live/eligibility", authenticate, liveLimiter, async (req, res) => {
+  const dateOfBirth = String(req.body?.dateOfBirth || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth)) {
+    return res.status(400).json({ error: "Enter a valid date of birth." });
+  }
+  if (req.body?.acceptedRules !== true) {
+    return res.status(400).json({ error: "You must accept the Gist-Up Live Rules." });
+  }
+  const [year, month, day] = dateOfBirth.split("-").map(Number);
+  const birth = new Date(Date.UTC(year, month - 1, day));
+  const today = new Date();
+  const nowUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  if (birth.getUTCFullYear() !== year || birth.getUTCMonth() !== month - 1 || birth.getUTCDate() !== day || birth > nowUtc) {
+    return res.status(400).json({ error: "Enter a real date of birth that is not in the future." });
+  }
+  let age = nowUtc.getUTCFullYear() - year;
+  const birthdayNotReached = nowUtc.getUTCMonth() < month - 1 || (nowUtc.getUTCMonth() === month - 1 && nowUtc.getUTCDate() < day);
+  if (birthdayNotReached) age -= 1;
+  const eligible = age >= 18;
+  try {
+    const result = await pool.query(
+      `UPDATE users
+       SET live_host_eligible = $1, live_age_checked_at = NOW(),
+           live_rules_version = $2, live_rules_accepted_at = NOW()
+       WHERE id = $3
+       RETURNING live_host_eligible, live_age_checked_at, live_rules_version, live_rules_accepted_at`,
+      [eligible, LIVE_RULES_VERSION, req.user.id]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Account not found." });
+    const row = result.rows[0];
+    return res.status(200).json({ eligibility: {
+      eligible: row.live_host_eligible === true,
+      age_blocked: row.live_host_eligible === false,
+      age_checked_at: row.live_age_checked_at,
+      rules_version: row.live_rules_version,
+      rules_accepted_at: row.live_rules_accepted_at
+    } });
+  } catch (error) {
+    console.error("Live eligibility submission failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't save your Live eligibility check." });
+  }
+});
+
 app.post("/api/live/sessions", authenticate, liveLimiter, async (req, res) => {
   const title = String(req.body?.title || "").trim().slice(0, 100);
   const client = await pool.connect();
@@ -1609,6 +1676,10 @@ async function start() {
       await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users (username)");
 
       await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT FALSE");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS live_host_eligible BOOLEAN NOT NULL DEFAULT FALSE");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS live_age_checked_at TIMESTAMPTZ");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS live_rules_version VARCHAR(30)");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS live_rules_accepted_at TIMESTAMPTZ");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS verification_applications (
           id BIGSERIAL PRIMARY KEY,
