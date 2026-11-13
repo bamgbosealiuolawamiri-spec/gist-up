@@ -385,7 +385,7 @@ app.get("/api/live/eligibility", authenticate, async (req, res) => {
 });
 app.post("/api/live/eligibility", authenticate, liveLimiter, async (req, res) => {
   const dob = String(req.body?.dateOfBirth || "");
-  if (!/^\d{4}-\\d{2}-\\d{2}$/.test(dob) || req.body?.acceptedRules !== true) return res.status(400).json({ error: "Enter a valid date and accept the Live Rules." });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dob) || req.body?.acceptedRules !== true) return res.status(400).json({ error: "Enter a valid date and accept the Live Rules." });
   const [y, m, d] = dob.split("-").map(Number);
   const birth = new Date(Date.UTC(y, m - 1, d)); const now = new Date();
   const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
