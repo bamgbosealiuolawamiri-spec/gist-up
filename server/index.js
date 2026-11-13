@@ -385,7 +385,7 @@ app.get("/api/live/eligibility", authenticate, async (req, res) => {
 });
 app.post("/api/live/eligibility", authenticate, liveLimiter, async (req, res) => {
   const dob = String(req.body?.dateOfBirth || "");
-  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(dob) || req.body?.acceptedRules !== true) return res.status(400).json({ error: "Enter a valid date and accept the Live Rules." });
+  if (!/^\d{4}-\\d{2}-\\d{2}$/.test(dob) || req.body?.acceptedRules !== true) return res.status(400).json({ error: "Enter a valid date and accept the Live Rules." });
   const [y, m, d] = dob.split("-").map(Number);
   const birth = new Date(Date.UTC(y, m - 1, d)); const now = new Date();
   const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -453,7 +453,7 @@ app.get("/api/public-live/:id/state", authenticate, liveLimiter, async (req, res
 });
 app.post("/api/public-live/:id/signals", authenticate, liveLimiter, async (req, res) => {
   const type = String(req.body?.type || ""), target = String(req.body?.recipientUserId || ""), payload = req.body?.payload;
-  if (!["offer","answer","ice"].includes(type) || !/^\\d+$/.test(target) || !payload || typeof payload !== "object" || JSON.stringify(payload).length > 100000) return res.status(400).json({ error: "Invalid Live connection signal." });
+  if (!["offer","answer","ice"].includes(type) || !/^\d+$/.test(target) || !payload || typeof payload !== "object" || JSON.stringify(payload).length > 100000) return res.status(400).json({ error: "Invalid Live connection signal." });
   try {
     const room = await getPublicLiveRoom(req.params.id); if (!room) return res.status(404).json({ error: "Broadcast ended." });
     const host = String(room.host_user_id) === String(req.user.id);
@@ -484,7 +484,7 @@ app.post("/api/public-live/:id/moderation", authenticate, liveLimiter, async (re
     const room=await getPublicLiveRoom(req.params.id);
     if(!room||String(room.host_user_id)!==String(req.user.id))return res.status(403).json({error:"Only the host can moderate this broadcast."});
     if(action==="comments"){const enabled=req.body?.enabled===true;await pool.query("UPDATE public_live_rooms SET comments_enabled=$1 WHERE id=$2",[enabled,room.id]);return res.json({ok:true,comments_enabled:enabled});}
-    if(action==="remove"&&/^\\d+$/.test(target)&&target!==String(req.user.id)){const result=await pool.query("UPDATE public_live_viewers SET removed_at=NOW() WHERE room_id=$1 AND user_id=$2 AND removed_at IS NULL RETURNING user_id",[room.id,target]);if(!result.rowCount)return res.status(404).json({error:"Viewer not found."});return res.json({ok:true});}
+    if(action==="remove"&&/^\d+$/.test(target)&&target!==String(req.user.id)){const result=await pool.query("UPDATE public_live_viewers SET removed_at=NOW() WHERE room_id=$1 AND user_id=$2 AND removed_at IS NULL RETURNING user_id",[room.id,target]);if(!result.rowCount)return res.status(404).json({error:"Viewer not found."});return res.json({ok:true});}
     res.status(400).json({error:"Unsupported moderation action."});
   }catch(error){console.error("Public Live moderation failed:",error?.message||error);res.status(500).json({error:"Moderation action failed."});}
 });
