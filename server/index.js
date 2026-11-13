@@ -238,7 +238,7 @@ app.post("/api/live/sessions/join", authenticate, liveLimiter, async (req, res) 
     if (String(session.host_user_id) === String(req.user.id)) { await client.query("ROLLBACK"); return res.status(400).json({ error: "The host is already in this room." }); }
     const existing = await client.query("SELECT left_at FROM live_participants WHERE session_id = $1 AND user_id = $2", [session.id, req.user.id]);
     const count = await client.query("SELECT COUNT(*)::int AS count FROM live_participants WHERE session_id = $1 AND left_at IS NULL", [session.id]);
-    if (!existing.rowCount && Number(count.rows[0].count) >= 4) {
+    if ((!existing.rowCount || existing.rows[0].left_at) && Number(count.rows[0].count) >= 4) {
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "This private room is full. It supports up to 4 people." });
     }
@@ -282,7 +282,7 @@ app.post("/api/live/sessions/:id/signals", authenticate, liveLimiter, async (req
   const payload = req.body?.payload;
   const recipientUserId = String(req.body?.recipientUserId || "");
   if (!allowed.includes(signalType)) return res.status(400).json({ error: "Unsupported connection signal." });
-  if (!/^\\d+$/.test(recipientUserId) || !payload || typeof payload !== "object" || JSON.stringify(payload).length > 20000) {
+  if (!/^\d+$/.test(recipientUserId) || !payload || typeof payload !== "object" || JSON.stringify(payload).length > 20000) {
     return res.status(400).json({ error: "Invalid private connection signal." });
   }
   try {
