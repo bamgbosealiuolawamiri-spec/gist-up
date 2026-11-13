@@ -362,7 +362,7 @@ app.delete("/api/live/sessions/:id", authenticate, liveLimiter, async (req, res)
 const LIVE_RULES_VERSION = "2026-11-13";
 async function getPublicLiveRoom(roomId) {
   const result = await pool.query(
-    "SELECT r.*, u.full_name AS host_name, u.username AS host_username, u.avatar_url AS host_avatar FROM public_live_rooms r JOIN users u ON u.id = r.host_user_id WHERE r.id = $1 AND r.status = 'active' LIMIT 1",
+    "SELECT r.*, u.full_name AS host_name, u.username AS host_username, u.avatar_url AS host_avatar FROM public_live_rooms r JOIN users u ON u.id = r.host_user_id WHERE r.id = $1 AND r.status = 'active' AND r.last_seen_at > NOW() - INTERVAL '45 seconds' LIMIT 1",
     [roomId]
   );
   return result.rows[0] || null;
@@ -405,7 +405,7 @@ app.get("/api/public-live", authenticate, async (_req, res) => {
   try {
     const result = await pool.query(`SELECT r.id, r.title, r.created_at, u.full_name AS host_name, u.username AS host_username,
       (SELECT COUNT(*)::int FROM public_live_viewers v WHERE v.room_id = r.id AND v.removed_at IS NULL AND v.last_seen_at > NOW() - INTERVAL '45 seconds') AS viewer_count
-      FROM public_live_rooms r JOIN users u ON u.id = r.host_user_id WHERE r.status = 'active' ORDER BY r.created_at DESC LIMIT 30`);
+      FROM public_live_rooms r JOIN users u ON u.id = r.host_user_id WHERE r.status = 'active' AND r.last_seen_at > NOW() - INTERVAL '45 seconds' ORDER BY r.created_at DESC LIMIT 30`);
     res.json({ rooms: result.rows });
   } catch (error) { console.error("Public Live list failed:", error?.message || error); res.status(500).json({ error: "Couldn't load Live broadcasts." }); }
 });
@@ -439,6 +439,7 @@ app.get("/api/public-live/:id/state", authenticate, liveLimiter, async (req, res
     const room = await getPublicLiveRoom(req.params.id);
     if (!room) return res.status(404).json({ error: "This broadcast has ended." });
     const host = String(room.host_user_id) === String(req.user.id);
+    if (host) await pool.query("UPDATE public_live_rooms SET last_seen_at = NOW() WHERE id = $1", [room.id]);
     if (!host) {
       const active = await pool.query("UPDATE public_live_viewers SET last_seen_at=NOW() WHERE room_id=$1 AND user_id=$2 AND removed_at IS NULL RETURNING user_id", [room.id, req.user.id]);
       if (!active.rowCount) return res.status(403).json({ error: "You are not an active viewer." });
@@ -1977,6 +1978,7 @@ async function start() {
         status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active','ended')),
         comments_enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), ended_at TIMESTAMPTZ
       )`);
+      await pool.query("ALTER TABLE public_live_rooms ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
       await pool.query("CREATE INDEX IF NOT EXISTS public_live_rooms_active_idx ON public_live_rooms (status, created_at DESC)");
       await pool.query(`CREATE TABLE IF NOT EXISTS public_live_viewers (
         room_id BIGINT NOT NULL REFERENCES public_live_rooms(id) ON DELETE CASCADE,
