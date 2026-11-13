@@ -180,62 +180,118 @@ app.post("/api/admin/email-test", authenticate, authLimiter, async (req, res) =>
 });
 
 
-const liveLimiter = rateLimit({ windowMs: 60 * 1000, limit: 70, standardHeaders: "draft-7", legacyHeaders: false });
+const liveLimiter = rateLimit({ windowMs: 60 * 1000, limit: 300, standardHeaders: "draft-7", legacyHeaders: false });
 async function getLiveParticipant(sessionId, userId) {
   const result = await pool.query(
-    "SELECT id, host_user_id, viewer_user_id, status, expires_at FROM live_sessions WHERE id = $1 AND status = 'active' AND expires_at > NOW() LIMIT 1",
+    `SELECT s.id, s.host_user_id, s.status, s.expires_at, p.joined_at
+     FROM live_sessions s
+     JOIN live_participants p ON p.session_id = s.id AND p.user_id = $2 AND p.left_at IS NULL
+     WHERE s.id = $1 AND s.status = 'active' AND s.expires_at > NOW() LIMIT 1`,
+    [sessionId, userId]
+  );
+  return result.rows[0] || null;
+}
+async function getLiveRoster(sessionId) {
+  const result = await pool.query(
+    `SELECT u.id, u.full_name, u.username, u.avatar_url
+     FROM live_participants p JOIN users u ON u.id = p.user_id
+     WHERE p.session_id = $1 AND p.left_at IS NULL
+       AND p.last_seen_at > NOW() - INTERVAL '90 seconds'
+     ORDER BY p.joined_at ASC`,
     [sessionId]
   );
-  const session = result.rows[0];
-  if (!session || (String(session.host_user_id) !== String(userId) && String(session.viewer_user_id) !== String(userId))) return null;
-  return session;
+  return result.rows;
 }
 
 app.post("/api/live/sessions", authenticate, liveLimiter, async (req, res) => {
   const title = String(req.body?.title || "").trim().slice(0, 100);
+  const client = await pool.connect();
   try {
-    await pool.query("UPDATE live_sessions SET status = 'ended' WHERE host_user_id = $1 AND status = 'active'", [req.user.id]);
+    await client.query("BEGIN");
+    await client.query("UPDATE live_sessions SET status = 'ended' WHERE host_user_id = $1 AND status = 'active'", [req.user.id]);
     const inviteCode = randomBytes(5).toString("hex").slice(0, 8).toUpperCase();
-    const result = await pool.query(
+    const result = await client.query(
       "INSERT INTO live_sessions (host_user_id, title, invite_code, expires_at) VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes') RETURNING id, title, invite_code, status, expires_at",
       [req.user.id, title || "Private Gist-Up Live", inviteCode]
     );
-    res.status(201).json({ session: result.rows[0], role: "host" });
+    const session = result.rows[0];
+    await client.query("INSERT INTO live_participants (session_id, user_id) VALUES ($1, $2)", [session.id, req.user.id]);
+    await client.query("COMMIT");
+    res.status(201).json({ session, role: "host", participants: [{ id: req.user.id, full_name: req.user.full_name, username: req.user.username, avatar_url: req.user.avatar_url }] });
   } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
     console.error("Live session create failed:", error?.message || "unknown error");
     res.status(500).json({ error: "We couldn't start a private live session. Please try again." });
-  }
+  } finally { client.release(); }
 });
 
 app.post("/api/live/sessions/join", authenticate, liveLimiter, async (req, res) => {
   const inviteCode = String(req.body?.inviteCode || "").trim().toUpperCase();
   if (!/^[A-F0-9]{8}$/.test(inviteCode)) return res.status(400).json({ error: "Enter the 8-character invite code." });
+  const client = await pool.connect();
   try {
-    const result = await pool.query(
-      `UPDATE live_sessions SET viewer_user_id = $1
-       WHERE invite_code = $2 AND status = 'active' AND expires_at > NOW()
-         AND host_user_id <> $1 AND (viewer_user_id IS NULL OR viewer_user_id = $1)
-       RETURNING id, title, status, expires_at`,
-      [req.user.id, inviteCode]
+    await client.query("BEGIN");
+    const found = await client.query(
+      "SELECT id, host_user_id, title, status, expires_at FROM live_sessions WHERE invite_code = $1 AND status = 'active' AND expires_at > NOW() FOR UPDATE",
+      [inviteCode]
     );
-    if (!result.rowCount) return res.status(404).json({ error: "That invite code is invalid, expired, or already in use." });
-    res.json({ session: result.rows[0], role: "viewer" });
+    if (!found.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ error: "That invite code is invalid or expired." }); }
+    const session = found.rows[0];
+    if (String(session.host_user_id) === String(req.user.id)) { await client.query("ROLLBACK"); return res.status(400).json({ error: "The host is already in this room." }); }
+    const existing = await client.query("SELECT left_at, (last_seen_at < NOW() - INTERVAL '90 seconds') AS stale FROM live_participants WHERE session_id = $1 AND user_id = $2", [session.id, req.user.id]);
+    const count = await client.query("SELECT COUNT(*)::int AS count FROM live_participants WHERE session_id = $1 AND left_at IS NULL AND last_seen_at > NOW() - INTERVAL '90 seconds'", [session.id]);
+    if ((!existing.rowCount || existing.rows[0].left_at || existing.rows[0].stale) && Number(count.rows[0].count) >= 4) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "This private room is full. It supports up to 4 people." });
+    }
+    await client.query(
+      `INSERT INTO live_participants (session_id, user_id) VALUES ($1, $2)
+       ON CONFLICT (session_id, user_id) DO UPDATE SET joined_at = NOW(), last_seen_at = NOW(), left_at = NULL`,
+      [session.id, req.user.id]
+    );
+    await client.query("COMMIT");
+    const participants = await getLiveRoster(session.id);
+    res.json({ session, role: "participant", participants });
   } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
     console.error("Live session join failed:", error?.message || "unknown error");
     res.status(500).json({ error: "We couldn't join that private session. Please try again." });
-  }
+  } finally { client.release(); }
 });
 
 app.get("/api/live/sessions/:id/signals", authenticate, liveLimiter, async (req, res) => {
   try {
     const session = await getLiveParticipant(req.params.id, req.user.id);
     if (!session) return res.status(404).json({ error: "This private live session has ended or is unavailable." });
-    const after = Math.max(0, Number.parseInt(req.query.after || "0", 10) || 0);
-    const result = await pool.query(
-      "SELECT id, sender_user_id, signal_type, payload FROM live_signals WHERE session_id = $1 AND id > $2 AND sender_user_id <> $3 ORDER BY id ASC LIMIT 50",
-      [session.id, after, req.user.id]
+    await pool.query(
+      "UPDATE live_participants SET last_seen_at = NOW() WHERE session_id = $1 AND user_id = $2 AND left_at IS NULL",
+      [session.id, req.user.id]
     );
-    res.json({ signals: result.rows, status: session.status });
+    await pool.query(
+      `UPDATE live_sessions s SET status = 'ended'
+       WHERE s.id = $1 AND s.status = 'active'
+         AND EXISTS (
+           SELECT 1 FROM live_participants p
+           WHERE p.session_id = s.id AND p.user_id = s.host_user_id
+             AND p.left_at IS NULL AND p.last_seen_at < NOW() - INTERVAL '90 seconds'
+         )`,
+      [session.id]
+    );
+    await pool.query(
+      "UPDATE live_participants SET left_at = NOW() WHERE session_id = $1 AND left_at IS NULL AND last_seen_at < NOW() - INTERVAL '90 seconds'",
+      [session.id]
+    );
+    const refreshedSession = await getLiveParticipant(req.params.id, req.user.id);
+    if (!refreshedSession) return res.status(410).json({ error: "The host has left or this private room has expired." });
+    const after = Math.max(0, Number.parseInt(req.query.after || "0", 10) || 0);
+    const [signals, participants] = await Promise.all([
+      pool.query(
+        "SELECT id, sender_user_id, signal_type, payload FROM live_signals WHERE session_id = $1 AND recipient_user_id = $2 AND created_at >= $3 AND id > $4 ORDER BY id ASC LIMIT 100",
+        [session.id, req.user.id, session.joined_at, after]
+      ),
+      getLiveRoster(session.id)
+    ]);
+    res.json({ signals: signals.rows, participants, status: session.status });
   } catch (error) {
     console.error("Live signal poll failed:", error?.message || "unknown error");
     res.status(500).json({ error: "Couldn't check the private connection." });
@@ -245,20 +301,45 @@ app.get("/api/live/sessions/:id/signals", authenticate, liveLimiter, async (req,
 app.post("/api/live/sessions/:id/signals", authenticate, liveLimiter, async (req, res) => {
   const signalType = String(req.body?.type || "");
   const allowed = ["offer", "answer", "ice"];
-  if (!allowed.includes(signalType)) return res.status(400).json({ error: "Unsupported connection signal." });
   const payload = req.body?.payload;
-  if (!payload || typeof payload !== "object" || JSON.stringify(payload).length > 20000) return res.status(400).json({ error: "Invalid connection signal." });
+  const recipientUserId = String(req.body?.recipientUserId || "");
+  if (!allowed.includes(signalType)) return res.status(400).json({ error: "Unsupported connection signal." });
+  if (!/^\d+$/.test(recipientUserId) || !payload || typeof payload !== "object" || JSON.stringify(payload).length > 20000) {
+    return res.status(400).json({ error: "Invalid private connection signal." });
+  }
   try {
     const session = await getLiveParticipant(req.params.id, req.user.id);
     if (!session) return res.status(404).json({ error: "This private live session has ended or is unavailable." });
+    const recipient = await pool.query(
+      "SELECT 1 FROM live_participants WHERE session_id = $1 AND user_id = $2 AND left_at IS NULL LIMIT 1",
+      [session.id, recipientUserId]
+    );
+    if (!recipient.rowCount || String(recipientUserId) === String(req.user.id)) return res.status(403).json({ error: "That participant is not available in this room." });
     const result = await pool.query(
-      "INSERT INTO live_signals (session_id, sender_user_id, signal_type, payload) VALUES ($1, $2, $3, $4::jsonb) RETURNING id",
-      [session.id, req.user.id, signalType, JSON.stringify(payload)]
+      "INSERT INTO live_signals (session_id, sender_user_id, recipient_user_id, signal_type, payload) VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id",
+      [session.id, req.user.id, recipientUserId, signalType, JSON.stringify(payload)]
     );
     res.status(201).json({ ok: true, id: result.rows[0].id });
   } catch (error) {
     console.error("Live signal send failed:", error?.message || "unknown error");
     res.status(500).json({ error: "Couldn't send the private connection signal." });
+  }
+});
+
+app.delete("/api/live/sessions/:id/participants/me", authenticate, liveLimiter, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE live_participants SET left_at = NOW() WHERE session_id = $1 AND user_id = $2 AND left_at IS NULL RETURNING session_id",
+      [req.params.id, req.user.id]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "You are no longer in this private room." });
+    if (String((await pool.query("SELECT host_user_id FROM live_sessions WHERE id = $1", [req.params.id])).rows[0]?.host_user_id) === String(req.user.id)) {
+      await pool.query("UPDATE live_sessions SET status = 'ended' WHERE id = $1 AND status = 'active'", [req.params.id]);
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("Live participant leave failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "Couldn't leave the private room cleanly." });
   }
 });
 
@@ -269,6 +350,7 @@ app.delete("/api/live/sessions/:id", authenticate, liveLimiter, async (req, res)
       [req.params.id, req.user.id]
     );
     if (!result.rowCount) return res.status(404).json({ error: "This live session is already ended or unavailable." });
+    await pool.query("UPDATE live_participants SET left_at = NOW() WHERE session_id = $1 AND left_at IS NULL", [req.params.id]);
     res.json({ ok: true });
   } catch (error) {
     console.error("Live session end failed:", error?.message || "unknown error");
@@ -1722,6 +1804,17 @@ async function start() {
       `);
       await pool.query("CREATE INDEX IF NOT EXISTS live_sessions_active_idx ON live_sessions (status, expires_at)");
       await pool.query(`
+        CREATE TABLE IF NOT EXISTS live_participants (
+          session_id BIGINT NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+          user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          left_at TIMESTAMPTZ,
+          PRIMARY KEY (session_id, user_id)
+        )
+      `);
+      await pool.query("ALTER TABLE live_participants ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
+      await pool.query("CREATE INDEX IF NOT EXISTS live_participants_active_idx ON live_participants (session_id, left_at, last_seen_at)");
+      await pool.query(`
         CREATE TABLE IF NOT EXISTS live_signals (
           id BIGSERIAL PRIMARY KEY,
           session_id BIGINT NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
@@ -1731,7 +1824,9 @@ async function start() {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `);
+      await pool.query("ALTER TABLE live_signals ADD COLUMN IF NOT EXISTS recipient_user_id BIGINT REFERENCES users(id) ON DELETE CASCADE");
       await pool.query("CREATE INDEX IF NOT EXISTS live_signals_session_idx ON live_signals (session_id, id)");
+      await pool.query("CREATE INDEX IF NOT EXISTS live_signals_recipient_idx ON live_signals (session_id, recipient_user_id, id)");
 
       console.log("Gist Up database schema is ready.");
     } catch (error) {
