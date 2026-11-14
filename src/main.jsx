@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Home, Compass, Users, MessageCircle, Bell, Bookmark, Settings, Plus, Search, Heart, MessageSquare, Repeat2, Send, Image as ImageIcon, Smile, Menu, X, ArrowRight, TrendingUp, MoreHorizontal, UserRound, ShieldCheck, SlidersHorizontal, Hash, Mail, Lock, Eye, EyeOff, ChevronRight, Check, Paperclip, SmilePlus, BarChart3, Megaphone, CircleHelp, LogOut, Globe2, Moon, Shield, Trash2, Archive, Ban, Camera, Pencil, Share2, Flame, Clock, UserPlus, FileText, BookOpen, Bot, ArrowUpRight, ArrowDownToLine, Video } from "lucide-react";
+import { Home, Compass, Users, MessageCircle, Bell, Bookmark, Settings, Plus, Search, Heart, MessageSquare, Repeat2, Send, Image as ImageIcon, Smile, Menu, X, ArrowRight, TrendingUp, MoreHorizontal, UserRound, ShieldCheck, SlidersHorizontal, Hash, Mail, Lock, Eye, EyeOff, ChevronRight, Check, Paperclip, SmilePlus, BarChart3, Megaphone, CircleHelp, LogOut, Globe2, Moon, Shield, Trash2, Archive, Ban, Camera, Pencil, Share2, Flame, Clock, UserPlus, FileText, BookOpen, Bot, ArrowUpRight, ArrowDownToLine, Video, Wallet, Coins, History, Gift } from "lucide-react";
 import "./index.css";
 
 const API_BASE = "https://gist-up-api.onrender.com";
@@ -20,6 +20,9 @@ const sidebarGroups = [
   ]},
   { title: "GO LIVE", items: [
     { label: "Live", icon: Video }
+  ]},
+  { title: "YOUR WALLET", items: [
+    { label: "Wallet", icon: Wallet }
   ]},
   { title: "CREATE", items: [
     { label: "Creator Studio", icon: FileText }, { label: "Image Studio", icon: ImageIcon }
@@ -1715,7 +1718,20 @@ function App() {
       </section>
     </div>;
   }
-  const page = active==="Home"?<HomePage/>:active==="Live"?<LivePage/>:active==="Explore"?<ExplorePage/>:active==="Communities"?<CommunitiesPage/>:active==="Messages"?MessagesPage():active==="Notifications"?<NotificationsPage/>:active==="Saved"?<SavedPage/>:active==="Profile"?(selectedProfile?<OtherProfilePage/>:<ProfilePage/>):active==="Creator Studio"?<CreatorStudioPage/>:active==="Gisty AI"?<AssistantPage/>:active==="Image Studio"?<ImageStudioPage/>:active==="Ads Manager"?<AdsManagerPage/>:active==="Settings & Privacy"?<SettingsPage/>:<HomePage />;
+  function WalletPage() {
+    const [walletTab, setWalletTab] = useState("Overview");
+    const tabs = ["Overview", "Get Coins", "Gift history", "Creator earnings"];
+    return <section className="wallet-page">
+      <div className="wallet-preview-banner"><span className="wallet-preview-icon"><Wallet size={22}/></span><div><strong>Gist-Up Wallet preview</strong><p>This is a design preview. Purchases, transfers and withdrawals are not enabled.</p></div><span className="wallet-preview-pill">PREVIEW ONLY</span></div>
+      <div className="wallet-balance-card"><div><span className="wallet-eyebrow">YOUR COIN BALANCE</span><div className="wallet-balance-number"><Coins size={30}/> 0 <small>Gist Coins</small></div><p>Your balance will appear here when the feature is officially available.</p></div><div className="wallet-balance-art">💜</div></div>
+      <div className="wallet-tabs" role="tablist" aria-label="Wallet sections">{tabs.map(tab=><button type="button" role="tab" aria-selected={walletTab===tab} className={walletTab===tab?"active":""} onClick={()=>setWalletTab(tab)} key={tab}>{tab}</button>)}</div>
+      {walletTab==="Overview"&&<><div className="wallet-section-heading"><div><span className="eyebrow">YOUR ACTIVITY</span><h3>Wallet overview</h3></div><History size={20}/></div><div className="wallet-overview-grid"><article><span>Coins received</span><strong>0</strong><small>No coin activity yet</small></article><article><span>Gifts sent</span><strong>0</strong><small>Free demo gifts are separate</small></article><article><span>Creator earnings</span><strong>Not available</strong><small>Monetisation is not active</small></article></div><div className="wallet-info-note"><ShieldCheck size={19}/><p><strong>Your account stays protected.</strong> Any future wallet feature will include eligibility checks, clear transaction records and safety controls.</p></div></>}
+      {walletTab==="Get Coins"&&<><div className="wallet-section-heading"><div><span className="eyebrow">COIN PACKAGES</span><h3>Explore Gist Coins</h3></div><Coins size={20}/></div><div className="wallet-packages">{[{amount:"100",label:"Starter pack"},{amount:"500",label:"Creator pack"},{amount:"1,200",label:"Community pack"}].map((pack,index)=><article className={"wallet-package "+(index===1?"featured":"")} key={pack.amount}>{index===1&&<span className="wallet-popular">POPULAR PREVIEW</span>}<span className="wallet-package-coins"><Coins size={19}/>{pack.amount}</span><strong>{pack.label}</strong><small>Illustrative package · Price not set</small><button type="button" disabled>Purchases not available</button></article>)}</div><p className="wallet-footnote">These are sample package sizes for layout testing only. No payment method is connected and no purchase can be made.</p></>}
+      {walletTab==="Gift history"&&<><div className="wallet-section-heading"><div><span className="eyebrow">YOUR ACTIVITY</span><h3>Gift history</h3></div><Gift size={20}/></div><div className="wallet-empty-state"><Gift size={28}/><strong>No coin gifts yet</strong><p>When eligible gifting features become available, your activity will appear here. Free Live Battle cheers remain separate.</p></div></>}
+      {walletTab==="Creator earnings"&&<><div className="wallet-section-heading"><div><span className="eyebrow">CREATOR TOOLS</span><h3>Creator earnings</h3></div><BarChart3 size={20}/></div><div className="wallet-empty-state"><ShieldCheck size={28}/><strong>Earnings are not enabled</strong><p>There are no cash balances, withdrawals or payouts in this preview. Eligibility and adult-managed payment setup would be required before any future launch.</p></div></>}
+    </section>;
+  }
+  const page = active==="Wallet"?<WalletPage/>:active==="Home"?<HomePage/>:active==="Live"?<LivePage/>:active==="Explore"?<ExplorePage/>:active==="Communities"?<CommunitiesPage/>:active==="Messages"?MessagesPage():active==="Notifications"?<NotificationsPage/>:active==="Saved"?<SavedPage/>:active==="Profile"?(selectedProfile?<OtherProfilePage/>:<ProfilePage/>):active==="Creator Studio"?<CreatorStudioPage/>:active==="Gisty AI"?<AssistantPage/>:active==="Image Studio"?<ImageStudioPage/>:active==="Ads Manager"?<AdsManagerPage/>:active==="Settings & Privacy"?<SettingsPage/>:<HomePage />;
   return <div className="app-shell">
     <header className="topbar"><button className="mobile-menu icon-button" aria-label="Toggle navigation" onClick={()=>setMobileNav(!mobileNav)}>{mobileNav?<X size={20}/>:<Menu size={20}/>}</button><button className="brand" onClick={()=>go("Home")}><span className="brand-mark"><img src="/gist-up-mark.svg" alt="" /></span><span>gist<span className="brand-up">up</span></span></button><label className="searchbox"><Search size={18}/><input aria-label="Search" value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")go("Explore")}} placeholder="Search people, topics, and communities"/><kbd>⌘ K</kbd></label><div className="top-actions"><button className="icon-button" aria-label="Notifications" onClick={()=>go("Notifications")}><Bell size={20}/><i/></button><button className="top-profile" onClick={()=>go("Profile")}><Avatar initials={myInitials} size="small" imageUrl={authUser?.avatar_url}/><span className="profile-name">{displayName} {authUser?.is_verified&&<VerifiedBadge size={13}/>}</span></button></div></header>
     {notice&&<div className="toast" role="status">{notice}</div>}
