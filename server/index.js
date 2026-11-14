@@ -824,14 +824,17 @@ app.post("/api/support/requests", authenticate, authLimiter, async (req, res) =>
       [req.user.id, req.user.full_name, req.user.email, category, subject, details]
     );
     if (mailTransport) {
-      try {
-        await mailTransport.sendMail({
+      // Do not make the support form wait for SMTP. The request is already saved;
+      // send the admin notification asynchronously and log the outcome.
+      Promise.resolve()
+        .then(() => mailTransport.sendMail({
           from: process.env.GISTUP_FROM_EMAIL || process.env.SMTP_USER,
           to: verificationAdminEmail,
           subject: "New Gist-Up support request #" + result.rows[0].id,
           text: "A support request was submitted.\nFrom: " + req.user.full_name + " (" + req.user.email + ")\nTopic: " + category + "\nSubject: " + subject + "\n\n" + details + "\n\nReview it in Gist-Up Settings & Privacy > Support inbox."
-        });
-      } catch (mailError) { console.error("Support notification email failed:", mailError?.message || "unknown error"); }
+        }))
+        .then(() => console.info("Support notification email accepted by SMTP for request #" + result.rows[0].id))
+        .catch(mailError => console.error("Support notification email failed:", mailError?.message || "unknown error"));
     }
     return res.status(201).json({ request: result.rows[0], message: "Your request has been received. You can keep this reference number: #" + result.rows[0].id });
   } catch (error) {
