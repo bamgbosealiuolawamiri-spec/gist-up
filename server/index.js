@@ -267,7 +267,9 @@ app.get("/api/live/sessions/:id/battle", authenticate, liveLimiter, async (req, 
     await pool.query("INSERT INTO live_battles (session_id) VALUES ($1) ON CONFLICT (session_id) DO NOTHING", [session.id]);
     await pool.query("UPDATE live_battles SET status = 'ended', updated_at = NOW() WHERE session_id = $1 AND status = 'live' AND ends_at <= NOW()", [session.id]);
     const result = await pool.query("SELECT session_id, status, purple_score, pink_score, started_at, ends_at FROM live_battles WHERE session_id = $1", [session.id]);
-    res.json({ battle: result.rows[0] || null });
+    const gifts = await pool.query("SELECT gift_type, COUNT(*)::int AS total FROM live_battle_gifts WHERE session_id = $1 GROUP BY gift_type", [session.id]);
+    const recentGifts = await pool.query("SELECT g.gift_type, g.created_at, u.username FROM live_battle_gifts g JOIN users u ON u.id = g.sender_user_id WHERE g.session_id = $1 ORDER BY g.id DESC LIMIT 6", [session.id]);
+    res.json({ battle: result.rows[0] || null, gifts: gifts.rows, recent_gifts: recentGifts.rows });
   } catch (error) {
     console.error("Battle state read failed:", error?.message || "unknown error");
     res.status(500).json({ error: "Couldn't load the battle scoreboard." });
@@ -293,6 +295,33 @@ app.post("/api/live/sessions/:id/battle/start", authenticate, liveLimiter, async
     await client.query("ROLLBACK").catch(() => {});
     console.error("Battle start failed:", error?.message || "unknown error");
     res.status(500).json({ error: "Couldn't start the battle." });
+  } finally { client.release(); }
+});
+
+app.post("/api/live/sessions/:id/battle/gift", authenticate, liveLimiter, async (req, res) => {
+  const giftType = String(req.body?.giftType || "");
+  const allowedGifts = ["heart", "rose", "star", "fire"];
+  if (!allowedGifts.includes(giftType)) return res.status(400).json({ error: "Choose one of the available free gifts." });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const session = await client.query("SELECT id FROM live_sessions WHERE id = $1 AND status = 'active' AND expires_at > NOW()", [req.params.id]);
+    if (!session.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ error: "This private room is unavailable." }); }
+    const member = await client.query("SELECT 1 FROM live_participants WHERE session_id = $1 AND user_id = $2 AND left_at IS NULL AND last_seen_at > NOW() - INTERVAL '90 seconds'", [req.params.id, req.user.id]);
+    if (!member.rowCount) { await client.query("ROLLBACK"); return res.status(403).json({ error: "Join the battle room before sending a gift." }); }
+    const battle = await client.query("SELECT status, ends_at FROM live_battles WHERE session_id = $1 FOR UPDATE", [req.params.id]);
+    if (!battle.rowCount || battle.rows[0].status !== "live" || new Date(battle.rows[0].ends_at) <= new Date()) { await client.query("ROLLBACK"); return res.status(409).json({ error: "Free gifts are available while the battle is live." }); }
+    const recent = await client.query("SELECT 1 FROM live_battle_gifts WHERE session_id = $1 AND sender_user_id = $2 AND created_at > NOW() - INTERVAL '2 seconds' LIMIT 1", [req.params.id, req.user.id]);
+    if (recent.rowCount) { await client.query("ROLLBACK"); return res.status(429).json({ error: "Please wait a moment before sending another gift." }); }
+    await client.query("INSERT INTO live_battle_gifts (session_id, sender_user_id, gift_type) VALUES ($1, $2, $3)", [req.params.id, req.user.id, giftType]);
+    const gifts = await client.query("SELECT gift_type, COUNT(*)::int AS total FROM live_battle_gifts WHERE session_id = $1 GROUP BY gift_type", [req.params.id]);
+    const recentGifts = await client.query("SELECT g.gift_type, g.created_at, u.username FROM live_battle_gifts g JOIN users u ON u.id = g.sender_user_id WHERE g.session_id = $1 ORDER BY g.id DESC LIMIT 6", [req.params.id]);
+    await client.query("COMMIT");
+    res.json({ gifts: gifts.rows, recent_gifts: recentGifts.rows });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Battle gift failed:", error?.message || "unknown error");
+    res.status(500).json({ error: "Couldn't send the free gift." });
   } finally { client.release(); }
 });
 
@@ -2063,6 +2092,15 @@ async function start() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`);
       await pool.query("CREATE INDEX IF NOT EXISTS live_battle_points_user_recent_idx ON live_battle_points (session_id, user_id, created_at DESC)");
+      await pool.query(`CREATE TABLE IF NOT EXISTS live_battle_gifts (
+        id BIGSERIAL PRIMARY KEY,
+        session_id BIGINT NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+        sender_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        gift_type VARCHAR(16) NOT NULL CHECK (gift_type IN ('heart','rose','star','fire')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`);
+      await pool.query("CREATE INDEX IF NOT EXISTS live_battle_gifts_session_idx ON live_battle_gifts (session_id, id DESC)");
+
 
 
 
