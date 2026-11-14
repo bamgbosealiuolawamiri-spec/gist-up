@@ -239,3 +239,9 @@
 .live-host-controls{padding-top:4px}
 @media(max-width:760px){.live-room-columns{grid-template-columns:1fr}.live-dashboard-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:560px){.live-room-heading{flex-direction:column}.live-room-viewer-total{align-self:flex-start}.live-dashboard-metrics strong{font-size:18px}}
+
+
+/* Keep a clear Like control visible on top of every public Live video */
+.live-viewer-like-button{position:absolute;z-index:6;left:14px;bottom:14px;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:42px;padding:0 16px;border:1px solid rgba(255,255,255,.3);border-radius:999px;background:#6d28d9;color:#fff;font-size:14px;font-weight:800;box-shadow:0 5px 18px rgba(0,0,0,.28);cursor:pointer;touch-action:manipulation}
+.live-viewer-like-button:hover{background:#5b21b6}
+.live-viewer-like-button:focus-visible{outline:3px solid #f9a8d4;outline-offset:3px}
