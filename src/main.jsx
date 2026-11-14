@@ -34,6 +34,14 @@ const sidebarGroups = [
 function Avatar({ initials, tone = "lavender", size = "", imageUrl = null }) { return <div className={"avatar " + tone + " " + size}>{imageUrl ? <img src={imageUrl} alt="" /> : initials}</div>; }
 function VerifiedBadge({ size = 15 }) { return <span className="verified-badge" title="Verified account" aria-label="Verified account"><ShieldCheck size={size}/></span>; }
 function App() {
+  const topics = [
+    ["Account & login", "Sign-up, login, password help, profile access and account settings."],
+    ["Posts, photos & videos", "Creating posts, uploading media, editing captions and managing published content."],
+    ["Live streaming", "Live access, camera permissions, viewers, comments and safety controls."],
+    ["Wallet & gifts", "Gist Coins, gift history, balances and creator gift activity."],
+    ["Verification", "Applying for verification, application updates and badge reviews."],
+    ["Safety & privacy", "Reporting content, blocking accounts, moderation decisions and privacy settings."]
+  ];
   const [active, setActive] = useState("Home");
   const [liked, setLiked] = useState([]);
   const [likedPosts, setLikedPosts] = useState([]);
