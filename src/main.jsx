@@ -1632,7 +1632,16 @@ function App() {
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || "Couldn't send the free gift.");
       setBattleGifts(d.gifts || []);
-      setRecentBattleGifts(d.recent_gifts || []);
+      const recent = Array.isArray(d.recent_gifts) ? d.recent_gifts : [];
+      setRecentBattleGifts(recent);
+      // Keep a small, account-local record of free demo gifts for the Wallet history.
+      try {
+        const key = "gistup:free-gift-history:" + authUser?.id;
+        const previous = JSON.parse(localStorage.getItem(key) || "[]");
+        const combined = [...recent, ...previous];
+        const unique = Array.from(new Map(combined.filter(item => item?.created_at && item?.gift_type).map(item => [String(item.created_at) + ":" + String(item.username || "") + ":" + String(item.gift_type), item])).values()).slice(0, 50);
+        localStorage.setItem(key, JSON.stringify(unique));
+      } catch { /* Gift sending should still work if local storage is unavailable. */ }
     } catch (e) { setBattleError(e.message || "Couldn't send the free gift."); }
     finally { setBattleBusy(false); }
   }
@@ -1720,6 +1729,15 @@ function App() {
   }
   function WalletPage() {
     const [walletTab, setWalletTab] = useState("Overview");
+    const [freeGiftHistory, setFreeGiftHistory] = useState(() => {
+      try { return JSON.parse(localStorage.getItem("gistup:free-gift-history:" + authUser?.id) || "[]"); }
+      catch { return []; }
+    });
+    useEffect(() => {
+      if (!authUser?.id) { setFreeGiftHistory([]); return; }
+      try { setFreeGiftHistory(JSON.parse(localStorage.getItem("gistup:free-gift-history:" + authUser.id) || "[]")); }
+      catch { setFreeGiftHistory([]); }
+    }, [authUser?.id]);
     const tabs = ["Overview", "Get Coins", "Gift history", "Creator earnings"];
     return <section className="wallet-page">
       <div className="wallet-preview-banner"><span className="wallet-preview-icon"><Wallet size={22}/></span><div><strong>Gist-Up Wallet preview</strong><p>This is a design preview. Purchases, transfers and withdrawals are not enabled.</p></div><span className="wallet-preview-pill">PREVIEW ONLY</span></div>
@@ -1727,7 +1745,7 @@ function App() {
       <div className="wallet-tabs" role="tablist" aria-label="Wallet sections">{tabs.map(tab=><button type="button" role="tab" aria-selected={walletTab===tab} className={walletTab===tab?"active":""} onClick={()=>setWalletTab(tab)} key={tab}>{tab}</button>)}</div>
       {walletTab==="Overview"&&<><div className="wallet-section-heading"><div><span className="eyebrow">YOUR ACTIVITY</span><h3>Wallet overview</h3></div><History size={20}/></div><div className="wallet-overview-grid"><article><span>Coins received</span><strong>0</strong><small>No coin activity yet</small></article><article><span>Gifts sent</span><strong>0</strong><small>Free demo gifts are separate</small></article><article><span>Creator earnings</span><strong>Not available</strong><small>Monetisation is not active</small></article></div><div className="wallet-info-note"><ShieldCheck size={19}/><p><strong>Your account stays protected.</strong> Any future wallet feature will include eligibility checks, clear transaction records and safety controls.</p></div></>}
       {walletTab==="Get Coins"&&<><div className="wallet-section-heading"><div><span className="eyebrow">COIN PACKAGES</span><h3>Explore Gist Coins</h3></div><Coins size={20}/></div><div className="wallet-packages">{[{amount:"100",label:"Starter pack"},{amount:"500",label:"Creator pack"},{amount:"1,200",label:"Community pack"}].map((pack,index)=><article className={"wallet-package "+(index===1?"featured":"")} key={pack.amount}>{index===1&&<span className="wallet-popular">POPULAR PREVIEW</span>}<span className="wallet-package-coins"><Coins size={19}/>{pack.amount}</span><strong>{pack.label}</strong><small>Illustrative package · Price not set</small><button type="button" disabled>Purchases not available</button></article>)}</div><p className="wallet-footnote">These are sample package sizes for layout testing only. No payment method is connected and no purchase can be made.</p></>}
-      {walletTab==="Gift history"&&<><div className="wallet-section-heading"><div><span className="eyebrow">YOUR ACTIVITY</span><h3>Gift history</h3></div><Gift size={20}/></div><div className="wallet-empty-state"><Gift size={28}/><strong>No coin gifts yet</strong><p>When eligible gifting features become available, your activity will appear here. Free Live Battle cheers remain separate.</p></div></>}
+      {walletTab==="Gift history"&&<><div className="wallet-section-heading"><div><span className="eyebrow">YOUR ACTIVITY</span><h3>Free Live Battle gift history</h3></div><Gift size={20}/></div><div className="wallet-info-note"><Gift size={18}/><p><strong>Free demo gifts only.</strong> These cheers have no coin cost or cash value and are not creator earnings.</p></div>{freeGiftHistory.length ? <div className="wallet-gift-history">{freeGiftHistory.map((gift,index)=><article className="wallet-gift-row" key={String(gift.created_at)+"-"+index}><span className="wallet-gift-emoji">{({heart:"💜",rose:"🌹",star:"⭐",fire:"🔥"})[gift.gift_type] || "🎁"}</span><div><strong>{({heart:"Heart",rose:"Rose",star:"Star",fire:"Fire"})[gift.gift_type] || "Live gift"}</strong><small>Sent by @{gift.username || "player"}</small></div><time>{gift.created_at ? new Date(gift.created_at).toLocaleString() : "Recent"}</time><span className="wallet-free-label">FREE</span></article>)}</div> : <div className="wallet-empty-state"><Gift size={28}/><strong>No free Live Battle gifts recorded yet</strong><p>When you send or receive free demo gifts in a Live Battle, recent gift activity will appear here on this device.</p></div>}</>}
       {walletTab==="Creator earnings"&&<><div className="wallet-section-heading"><div><span className="eyebrow">CREATOR TOOLS</span><h3>Creator earnings</h3></div><BarChart3 size={20}/></div><div className="wallet-empty-state"><ShieldCheck size={28}/><strong>Earnings are not enabled</strong><p>There are no cash balances, withdrawals or payouts in this preview. Eligibility and adult-managed payment setup would be required before any future launch.</p></div></>}
     </section>;
   }
