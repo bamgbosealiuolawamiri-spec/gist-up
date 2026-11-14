@@ -134,6 +134,9 @@ function App() {
   const [liveStatus, setLiveStatus] = useState("idle");
   const [liveParticipants, setLiveParticipants] = useState([]);
   const [liveRemoteStreams, setLiveRemoteStreams] = useState({});
+  const [battleState, setBattleState] = useState(null);
+  const [battleBusy, setBattleBusy] = useState(false);
+  const [battleError, setBattleError] = useState("");
 
   useEffect(() => {
     if (!authUser?.id) { setLiveEligibility(null); return; }
@@ -1392,6 +1395,7 @@ function App() {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || "The private room is no longer available.");
         const roster = data.participants || [];
+        fetch(API_BASE + "/api/live/sessions/" + encodeURIComponent(session.id) + "/battle", { credentials: "include" }).then(async r => { const d = await r.json().catch(() => ({})); if (r.ok) setBattleState(d.battle || null); }).catch(() => {});
         setLiveParticipants(roster);
         const activeIds = new Set(roster.filter(person => String(person.id) !== String(authUser?.id)).map(person => String(person.id)));
         for (const [id, peer] of peerConnectionsRef.current.entries()) {
@@ -1593,6 +1597,28 @@ function App() {
       setLiveCameraError(error.message || "Couldn't join that private room.");
     }
   }
+  async function startBattle() {
+    if (!liveSession || liveRole !== "host") return;
+    setBattleBusy(true); setBattleError("");
+    try {
+      const r = await fetch(API_BASE + "/api/live/sessions/" + encodeURIComponent(liveSession.id) + "/battle/start", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ durationSeconds: 180 }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Couldn't start the battle.");
+      setBattleState(d.battle);
+    } catch (e) { setBattleError(e.message || "Couldn't start the battle."); }
+    finally { setBattleBusy(false); }
+  }
+  async function sendBattleLike() {
+    if (!liveSession || !battleState || battleState.status !== "live") return;
+    setBattleBusy(true); setBattleError("");
+    try {
+      const r = await fetch(API_BASE + "/api/live/sessions/" + encodeURIComponent(liveSession.id) + "/battle/like", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Couldn't send your battle like.");
+      setBattleState(d.battle);
+    } catch (e) { setBattleError(e.message || "Couldn't send your battle like."); }
+    finally { setBattleBusy(false); }
+  }
   async function endPrivateLive() {
     const session = liveSession;
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
@@ -1670,7 +1696,7 @@ function App() {
         <p className="preview-note">Free-first WebRTC test, capped at four viewers per creator. Direct browser connections can fail on some networks. No unlimited audience or production-scale streaming is included.</p>
       </section>
       <section className="content-panel live-setup-panel"><div className="section-title"><h2>Private group video</h2><span className="welcome-pill">4-PERSON TEST</span></div>
-        {!liveSession?<><label className="auth-label">Private room title<input value={liveTitle} onChange={e=>setLiveTitle(e.target.value)} maxLength={100}/></label><button className="outline-button" onClick={prepareLiveCamera} disabled={liveCameraBusy||!!liveStream}>{liveStream?"Camera ready":liveCameraBusy?"Requesting…":"Turn on camera and microphone"}</button><button className="outline-button" onClick={startPrivateLive} disabled={!liveStream}>Start private room</button><div className="live-join-box"><label className="auth-label">Invite code<input value={liveJoinCode} onChange={e=>setLiveJoinCode(e.target.value.toUpperCase().slice(0,8))} maxLength={8}/></label><button className="outline-button" onClick={joinPrivateLive} disabled={liveJoinCode.trim().length!==8||!liveStream}>Join private room</button></div></>:<div className="live-session-card live-battle-session"><div className="battle-topbar"><div><span className="eyebrow">GIST-UP LIVE ARENA</span><h3>{liveSession.title}</h3><p>2 vs 2 creator battle · {liveParticipants.length}/4 on stage</p></div><span className="battle-live-badge"><i/> LIVE ROOM</span></div><section className="battle-scoreboard" aria-label="Live battle scoreboard"><div className="battle-team-score battle-purple"><span>TEAM PURPLE</span><strong>00</strong><small>{liveParticipants.slice(0,2).length}/2 players</small></div><div className="battle-versus">VS</div><div className="battle-team-score battle-pink"><span>TEAM PINK</span><strong>00</strong><small>{liveParticipants.slice(2,4).length}/2 players</small></div></section><div className="battle-stage-heading"><strong>THE BATTLE STAGE</strong><span>First two joiners · Purple &nbsp;|&nbsp; Next two · Pink</span></div><div className="live-participant-grid battle-participant-grid">{liveParticipants.map((person,index)=>{const self=String(person.id)===String(authUser?.id);const stream=self?liveStream:liveRemoteStreams[String(person.id)];const team=index<2?"purple":"pink";return <div className={"live-participant-tile battle-player-tile battle-player-"+team} key={person.id}><span className="battle-team-tag">{team==="purple"?"TEAM PURPLE":"TEAM PINK"}</span>{stream?<video className="live-camera-video" autoPlay muted={self} playsInline ref={el=>{if(el&&el.srcObject!==stream)el.srcObject=stream;}}/>:<span className="battle-connecting">Connecting video…</span>}<span className="battle-player-name">{self?"You":person.full_name||person.username}</span></div>;})}{Array.from({length:Math.max(0,4-liveParticipants.length)}).map((_,index)=><div className={"live-participant-tile battle-empty-slot "+(liveParticipants.length+index<2?"battle-player-purple":"battle-player-pink")} key={"empty-"+index}><span className="battle-team-tag">{liveParticipants.length+index<2?"TEAM PURPLE":"TEAM PINK"}</span><Users size={25}/><strong>Waiting for player</strong><small>Invite a teammate to fill this spot</small></div>)}</div><div className="battle-status-note"><span>⚡ BATTLE PREVIEW</span><p>Four-player video stage is connected to your private room. Shared team scoring, battle timer, and invitations are the next build stage.</p></div><button className="outline-button" onClick={endPrivateLive}>{liveRole==="host"?"End private room":"Leave private room"}</button></div>}
+        {!liveSession?<><label className="auth-label">Private room title<input value={liveTitle} onChange={e=>setLiveTitle(e.target.value)} maxLength={100}/></label><button className="outline-button" onClick={prepareLiveCamera} disabled={liveCameraBusy||!!liveStream}>{liveStream?"Camera ready":liveCameraBusy?"Requesting…":"Turn on camera and microphone"}</button><button className="outline-button" onClick={startPrivateLive} disabled={!liveStream}>Start private room</button><div className="live-join-box"><label className="auth-label">Invite code<input value={liveJoinCode} onChange={e=>setLiveJoinCode(e.target.value.toUpperCase().slice(0,8))} maxLength={8}/></label><button className="outline-button" onClick={joinPrivateLive} disabled={liveJoinCode.trim().length!==8||!liveStream}>Join private room</button></div></>:<div className="live-session-card live-battle-session"><div className="battle-topbar"><div><span className="eyebrow">GIST-UP LIVE ARENA</span><h3>{liveSession.title}</h3><p>2 vs 2 creator battle · {liveParticipants.length}/4 on stage</p></div><span className="battle-live-badge"><i/> LIVE ROOM</span></div><section className="battle-scoreboard" aria-label="Live battle scoreboard"><div className="battle-team-score battle-purple"><span>TEAM PURPLE</span><strong>{String(battleState?.purple_score || 0).padStart(2,"0")}</strong><small>{liveParticipants.slice(0,2).length}/2 players</small></div><div className="battle-versus">VS</div><div className="battle-team-score battle-pink"><span>TEAM PINK</span><strong>{String(battleState?.pink_score || 0).padStart(2,"0")}</strong><small>{liveParticipants.slice(2,4).length}/2 players</small></div></section><div className="battle-controls"><span className="battle-clock">{battleState?.status === "live" ? "BATTLE LIVE · " + Math.max(0,Math.ceil((new Date(battleState.ends_at).getTime()-Date.now())/1000)) + "s" : battleState?.status === "ended" ? "BATTLE FINISHED" : "READY WHEN ALL FOUR PLAYERS JOIN"}</span>{liveRole==="host"&&(!battleState||battleState.status==="waiting")&&<button className="primary-button" onClick={startBattle} disabled={battleBusy||liveParticipants.length!==4}>{battleBusy?"Starting…":"Start 3-minute battle"}</button>}{battleState?.status==="live"&&<button className="outline-button" onClick={sendBattleLike} disabled={battleBusy}>💜 Send team point</button>}</div><div className="battle-stage-heading"><strong>THE BATTLE STAGE</strong><span>First two joiners · Purple &nbsp;|&nbsp; Next two · Pink</span></div><div className="live-participant-grid battle-participant-grid">{liveParticipants.map((person,index)=>{const self=String(person.id)===String(authUser?.id);const stream=self?liveStream:liveRemoteStreams[String(person.id)];const team=index<2?"purple":"pink";return <div className={"live-participant-tile battle-player-tile battle-player-"+team} key={person.id}><span className="battle-team-tag">{team==="purple"?"TEAM PURPLE":"TEAM PINK"}</span>{stream?<video className="live-camera-video" autoPlay muted={self} playsInline ref={el=>{if(el&&el.srcObject!==stream)el.srcObject=stream;}}/>:<span className="battle-connecting">Connecting video…</span>}<span className="battle-player-name">{self?"You":person.full_name||person.username}</span></div>;})}{Array.from({length:Math.max(0,4-liveParticipants.length)}).map((_,index)=><div className={"live-participant-tile battle-empty-slot "+(liveParticipants.length+index<2?"battle-player-purple":"battle-player-pink")} key={"empty-"+index}><span className="battle-team-tag">{liveParticipants.length+index<2?"TEAM PURPLE":"TEAM PINK"}</span><Users size={25}/><strong>Waiting for player</strong><small>Invite a teammate to fill this spot</small></div>)}</div><div className="battle-status-note"><span>⚡ GIST-UP BATTLE</span><p>Each participant is assigned to a team by join order. During the timed round, a team member can send a point for their team. The scoreboard is shared by everyone in this room.</p></div>{battleError&&<p className="auth-error" role="alert">{battleError}</p>}<button className="outline-button" onClick={endPrivateLive}>{liveRole==="host"?"End private room":"Leave private room"}</button></div>}
         {liveCameraError&&<p className="auth-error">{liveCameraError}</p>}
       </section>
     </div>;
