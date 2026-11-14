@@ -28,7 +28,7 @@ const sidebarGroups = [
     { label: "Creator Studio", icon: FileText }, { label: "Image Studio", icon: ImageIcon }
   ]},
   { title: "MORE", items: [
-    { label: "Gisty AI", icon: Bot }, { label: "Ads Manager", icon: Megaphone }, { label: "Settings & Privacy", icon: Settings }, { label: "Profile", display: "My profile", icon: UserRound }
+    { label: "Gisty AI", icon: Bot }, { label: "Ads Manager", icon: Megaphone }, { label: "Help & Support", icon: CircleHelp }, { label: "Settings & Privacy", icon: Settings }, { label: "Profile", display: "My profile", icon: UserRound }
   ]}
 ];
 function Avatar({ initials, tone = "lavender", size = "", imageUrl = null }) { return <div className={"avatar " + tone + " " + size}>{imageUrl ? <img src={imageUrl} alt="" /> : initials}</div>; }
@@ -181,6 +181,20 @@ function App() {
   const [verificationBusy, setVerificationBusy] = useState(false);
   const [verificationQueue, setVerificationQueue] = useState([]);
   const [verificationQueueBusy, setVerificationQueueBusy] = useState(false);
+  const [supportCategory, setSupportCategory] = useState("Account & login");
+  const [supportSubject, setSupportSubject] = useState("");
+  const [supportDetails, setSupportDetails] = useState("");
+  const [supportBusy, setSupportBusy] = useState(false);
+  const [supportRequests, setSupportRequests] = useState([]);
+  const [supportInboxBusy, setSupportInboxBusy] = useState(false);
+  const [moderationAccounts, setModerationAccounts] = useState([]);
+  const [moderationQuery, setModerationQuery] = useState("");
+  const [moderationBusy, setModerationBusy] = useState(false);
+  const [accountAppeals, setAccountAppeals] = useState([]);
+  const [appealsBusy, setAppealsBusy] = useState(false);
+  const [appealReason, setAppealReason] = useState("");
+  const [appealBusy, setAppealBusy] = useState(false);
+  const [myAppeals, setMyAppeals] = useState([]);
   const isVerificationAdmin = String(authUser?.email || "").toLowerCase() === "gistup.admin@gmail.com";
   useEffect(() => {
     if (!authUser?.id) { setVerificationApplication(null); setVerificationQueue([]); return; }
@@ -189,6 +203,12 @@ function App() {
       .then(data => setVerificationApplication(data?.application || null))
       .catch(() => {});
   }, [authUser?.id]);
+  useEffect(() => {
+    if (!authUser?.id) { setMyAppeals([]); return; }
+    fetch(API_BASE + "/api/account/appeals/me", { credentials: "include" })
+      .then(async r => { const d = await r.json().catch(() => ({})); if (r.ok) setMyAppeals(d.appeals || []); })
+      .catch(() => {});
+  }, [authUser?.id, authUser?.account_status]);
   useEffect(() => {
     if (settingsTab !== "Verification review" || !isVerificationAdmin) return;
     setVerificationQueueBusy(true);
@@ -201,6 +221,79 @@ function App() {
       .catch(error => notify(error.message))
       .finally(() => setVerificationQueueBusy(false));
   }, [settingsTab, isVerificationAdmin]);
+  useEffect(() => {
+    if (!isVerificationAdmin) return;
+    if (settingsTab === "Account moderation") {
+      setModerationBusy(true);
+      fetch(API_BASE + "/api/admin/accounts", { credentials: "include" })
+        .then(async r => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || "Couldn't load accounts."); setModerationAccounts(d.accounts || []); })
+        .catch(error => notify(error.message)).finally(() => setModerationBusy(false));
+    }
+    if (settingsTab === "Appeals") {
+      setAppealsBusy(true);
+      fetch(API_BASE + "/api/admin/appeals", { credentials: "include" })
+        .then(async r => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || "Couldn't load appeals."); setAccountAppeals(d.appeals || []); })
+        .catch(error => notify(error.message)).finally(() => setAppealsBusy(false));
+    }
+    if (settingsTab === "Support inbox") {
+      setSupportInboxBusy(true);
+      fetch(API_BASE + "/api/admin/support", { credentials: "include" })
+        .then(async r => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || "Couldn't load support requests."); setSupportRequests(d.requests || []); })
+        .catch(error => notify(error.message)).finally(() => setSupportInboxBusy(false));
+    }
+  }, [settingsTab, isVerificationAdmin]);
+  async function submitSupportRequest() {
+    setSupportBusy(true);
+    try {
+      const response = await fetch(API_BASE + "/api/support/requests", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ category: supportCategory, subject: supportSubject, details: supportDetails }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Couldn't send your support request.");
+      setSupportSubject(""); setSupportDetails(""); notify(data.message || "Your support request was received.");
+    } catch (error) { notify(error.message || "Couldn't send your support request."); }
+    finally { setSupportBusy(false); }
+  }
+  async function submitAccountAppeal() {
+    setAppealBusy(true);
+    try {
+      const response = await fetch(API_BASE + "/api/account/appeals", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: appealReason }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Couldn't submit your appeal.");
+      setAppealReason("");
+      const refreshed = await fetch(API_BASE + "/api/account/appeals/me", { credentials: "include" });
+      const status = await refreshed.json().catch(() => ({})); setMyAppeals(status.appeals || []);
+      notify(data.message || "Your appeal was submitted.");
+    } catch (error) { notify(error.message || "Couldn't submit your appeal."); }
+    finally { setAppealBusy(false); }
+  }
+  async function moderateAccount(account, action) {
+    let reason = "";
+    if (action !== "restore") { reason = window.prompt("Enter the reason for this action (at least 10 characters):") || ""; if (reason.trim().length < 10) return; }
+    let days = 0;
+    if (action === "suspended") { days = Number(window.prompt("How many days should the suspension last? Enter 1–365:", "7")); if (!Number.isInteger(days) || days < 1 || days > 365) return; }
+    try {
+      const response = await fetch(API_BASE + "/api/admin/accounts/" + encodeURIComponent(account.id) + "/moderation", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, reason, days }) });
+      const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || "Couldn't update this account.");
+      setModerationAccounts(items => items.map(item => String(item.id) === String(account.id) ? { ...item, ...data.account } : item));
+      notify(action === "restore" ? "Account access restored." : action === "warn" ? "Warning recorded." : "Account status updated.");
+    } catch (error) { notify(error.message || "Couldn't update this account."); }
+  }
+  async function reviewAccountAppeal(appeal, decision) {
+    const reviewerNote = window.prompt("Enter a short explanation for this decision (at least 5 characters):") || ""; if (reviewerNote.trim().length < 5) return;
+    try {
+      const response = await fetch(API_BASE + "/api/admin/appeals/" + encodeURIComponent(appeal.id), { method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision, reviewerNote }) });
+      const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || "Couldn't save this appeal decision.");
+      setAccountAppeals(items => items.map(item => String(item.id) === String(appeal.id) ? { ...item, status: decision, reviewer_note: reviewerNote } : item));
+      notify(decision === "approved" ? "Appeal approved and account restored." : "Appeal declined.");
+    } catch (error) { notify(error.message || "Couldn't save this appeal decision."); }
+  }
+  async function updateSupportStatus(request, status) {
+    try {
+      const response = await fetch(API_BASE + "/api/admin/support/" + encodeURIComponent(request.id), { method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+      const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || "Couldn't update this request.");
+      setSupportRequests(items => items.map(item => String(item.id) === String(request.id) ? { ...item, status } : item));
+    } catch (error) { notify(error.message || "Couldn't update this request."); }
+  }
+
   async function submitVerificationApplication() {
     setVerificationBusy(true);
     try {
@@ -1257,8 +1350,31 @@ function App() {
       {campaignModalOpen&&<div className="modal-backdrop" onClick={()=>setCampaignModalOpen(false)}><section className="composer-modal" role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2>Create campaign</h2><button className="icon-button" onClick={()=>setCampaignModalOpen(false)}><X size={20}/></button></div><p className="muted">Your campaign will be saved as a draft. It will not run or charge you.</p><label className="auth-label">Campaign name<input value={campaignName} onChange={e=>setCampaignName(e.target.value)} maxLength={100} placeholder="e.g. Launch week awareness"/></label><label className="auth-label">Campaign goal<select value={campaignGoal} onChange={e=>setCampaignGoal(e.target.value)}><option>Reach</option><option>Engagement</option><option>Website visits</option><option>Followers</option></select></label><label className="auth-label">Daily budget (₦)<input type="number" min="100" max="100000000" step="100" value={campaignBudget} onChange={e=>setCampaignBudget(e.target.value)}/></label><label className="auth-label">Target audience<input value={campaignAudience} onChange={e=>setCampaignAudience(e.target.value)} maxLength={240} placeholder="e.g. Students and young creators in Lagos"/></label><button className="primary-button auth-main-btn" onClick={createCampaign} disabled={campaignBusy}>{campaignBusy?"Saving…":"Save campaign draft"} <ArrowRight size={16}/></button></section></div>}
     </div>;
   }
+  function HelpSupportPage() {
+    const topics = [["Account & login","Help with signing in, passwords and profile settings."],["Posts, photos & videos","Questions about creating, editing or sharing content."],["Live streaming","Help with joining broadcasts, viewers, chat and safety."],["Wallet & gifts","Questions about free gifts and wallet history."],["Verification","Help with verification applications and badges."],["Safety & privacy","Report a concern or ask about account restrictions."]];
+    return <div className="screen-stack help-centre">
+      <section className="feature-panel"><div><span className="welcome-pill"><CircleHelp size={14}/> GIST-UP SUPPORT</span><h2>How can we help?</h2><p>Find answers or send our team a message. We’ll review your request and follow up using your account email.</p></div><CircleHelp size={48}/></section>
+      <section className="content-panel"><h3>Browse help topics</h3><div className="help-topic-grid">{topics.map(([title,description])=><article className="help-topic-card" key={title}><strong>{title}</strong><p>{description}</p></article>)}</div></section>
+      <section className="content-panel"><h3>Contact Gist-Up support</h3><p className="muted">Never include your password, sign-in code or payment details.</p>
+        <label className="auth-label">What do you need help with?<select value={supportCategory} onChange={e=>setSupportCategory(e.target.value)}>{["Account & login","Posts, photos & videos","Live streaming","Wallet & gifts","Verification","Safety & privacy","Other"].map(item=><option key={item}>{item}</option>)}</select></label>
+        <label className="auth-label">Subject<input value={supportSubject} onChange={e=>setSupportSubject(e.target.value)} maxLength={140} placeholder="Briefly describe the issue"/></label>
+        <label className="auth-label">Tell us more<textarea value={supportDetails} onChange={e=>setSupportDetails(e.target.value)} maxLength={3000} rows={5} placeholder="Include what happened and what you expected to happen."/></label>
+        <button className="primary-button auth-main-btn" disabled={supportBusy||supportSubject.trim().length<4||supportDetails.trim().length<15} onClick={submitSupportRequest}>{supportBusy?"Sending…":"Send support request"} <Send size={15}/></button>
+      </section>
+    </div>;
+  }
+  function AccountAppealPage() {
+    const pending = myAppeals.some(item => item.status === "pending");
+    return <div className="screen-stack account-appeal-screen"><section className="content-panel account-status-panel"><span className="welcome-pill"><Shield size={14}/> ACCOUNT STATUS</span><h2>{authUser?.account_status === "banned" ? "Your account has been disabled" : "Your account is suspended"}</h2><p>{authUser?.account_status_reason || "Gist-Up has limited access to this account after a review of our Community Guidelines."}</p>
+      {authUser?.account_suspension_until&&<p><strong>Suspension ends:</strong> {new Date(authUser.account_suspension_until).toLocaleString()}</p>}
+      <p>You can still contact support and submit an appeal. An appeal is reviewed by the Gist-Up team; submitting one does not guarantee that the decision will change.</p></section>
+      <section className="content-panel"><h3>Submit an appeal</h3>{pending?<div className="empty-state-box"><Clock size={25}/><strong>Your appeal is under review</strong><p>We’ll update the status here when a decision is made.</p></div>:<><label className="auth-label">Explain why you believe this decision should be reviewed<textarea rows={6} maxLength={2000} value={appealReason} onChange={e=>setAppealReason(e.target.value)} placeholder="Share relevant context. Please do not include passwords or sign-in codes."/></label><button className="primary-button" disabled={appealBusy||appealReason.trim().length<30} onClick={submitAccountAppeal}>{appealBusy?"Submitting…":"Submit appeal"} <ArrowRight size={15}/></button></>}</section>
+      {myAppeals.length>0&&<section className="content-panel"><h3>Appeal history</h3>{myAppeals.map(item=><article className="appeal-history-row" key={item.id}><div><strong>Appeal #{item.id}</strong><span>{new Date(item.created_at).toLocaleString()}</span></div><span className={"welcome-pill appeal-status "+item.status}>{item.status}</span>{item.reviewer_note&&<p>{item.reviewer_note}</p>}</article>)}</section>}
+      <button className="outline-button" onClick={()=>go("Help & Support")}>Contact support <CircleHelp size={15}/></button>
+    </div>;
+  }
   function SettingsPage() {
-    const tabs=["Account","Verification","Privacy","Notifications","Appearance","Blocked accounts","Data & account", ...(isVerificationAdmin ? ["Verification review"] : [])];
+    const tabs=["Account","Verification","Privacy","Notifications","Appearance","Blocked accounts","Data & account","Help & Support", ...(isVerificationAdmin ? ["Verification review","Account moderation","Appeals","Support inbox"] : [])];
     const notificationOptions=[
       ["notificationsFollowers","New followers","When someone follows your account."],
       ["notificationsEngagement","Likes and comments","When people engage with your posts."],
@@ -1267,6 +1383,11 @@ function App() {
     ];
     return <div className="settings-layout"><section className="settings-menu">{tabs.map(t=><button key={t} className={settingsTab===t?"settings-selected":""} onClick={()=>setSettingsTab(t)}>{t==="Account"?<UserRound size={17}/>:t==="Privacy"?<Shield size={17}/>:t==="Notifications"?<Bell size={17}/>:t==="Appearance"?<Moon size={17}/>:t==="Blocked accounts"?<Ban size={17}/>:t==="Verification"||t==="Verification review"?<ShieldCheck size={17}/>:<Lock size={17}/>} {t}<ChevronRight size={15}/></button>)}</section><section className="settings-content"><h2>{settingsTab}</h2><p className="muted">Manage your real account preferences. Changes are saved to your account.</p>
 
+      {settingsTab==="Help & Support"&&<div className="content-panel"><p>Need help with your account, posts, Live, wallet or safety?</p><button className="primary-button" onClick={()=>go("Help & Support")}>Open Help & Support <ArrowRight size={15}/></button></div>}
+      {settingsTab==="Account moderation"&&isVerificationAdmin&&<div className="verification-review"><p className="muted">Search accounts and choose a proportionate action. Add a clear reason for every warning or restriction. Users can appeal account restrictions.</p><label className="auth-label">Find an account<input value={moderationQuery} onChange={e=>setModerationQuery(e.target.value)} placeholder="Search name, username or email"/></label>
+        {moderationBusy?<p className="muted">Loading accounts…</p>:moderationAccounts.filter(a=>!moderationQuery||[a.full_name,a.username,a.email].some(v=>String(v||"").toLowerCase().includes(moderationQuery.toLowerCase()))).map(account=><article className="content-panel moderation-account-card" key={account.id}><div className="section-title"><div><h3>{account.full_name}</h3><span>@{account.username} · {account.email}</span></div><span className={"welcome-pill appeal-status "+account.account_status}>{account.account_status}</span></div>{account.account_status_reason&&<p className="preview-note">{account.account_status_reason}</p>}{account.account_suspension_until&&<small>Until {new Date(account.account_suspension_until).toLocaleString()}</small>}<div className="verification-actions"><button className="outline-button" onClick={()=>moderateAccount(account,"warn")}>Warn</button><button className="outline-button" onClick={()=>moderateAccount(account,"restricted")}>Restrict</button><button className="outline-button" onClick={()=>moderateAccount(account,"suspended")}>Suspend</button><button className="outline-button" onClick={()=>moderateAccount(account,"banned")}>Disable</button>{account.account_status!=="active"&&<button className="primary-button" onClick={()=>moderateAccount(account,"restore")}>Restore</button>}</div></article>)}</div>}
+      {settingsTab==="Appeals"&&isVerificationAdmin&&<div className="verification-review">{appealsBusy?<p className="muted">Loading appeals…</p>:accountAppeals.length?accountAppeals.map(item=><article className="content-panel verification-application-card" key={item.id}><div className="section-title"><div><h3>{item.full_name} · @{item.username}</h3><span>{item.email} · Appeal #{item.id}</span></div><span className={"welcome-pill appeal-status "+item.status}>{item.status}</span></div><p>{item.reason}</p><small>Account status when submitted: {item.account_status_at_submission} · {new Date(item.created_at).toLocaleString()}</small>{item.reviewer_note&&<p className="preview-note">Decision note: {item.reviewer_note}</p>}{item.status==="pending"&&<div className="verification-actions"><button className="primary-button" onClick={()=>reviewAccountAppeal(item,"approved")}><Check size={14}/> Approve & restore</button><button className="outline-button" onClick={()=>reviewAccountAppeal(item,"rejected")}>Decline with reason</button></div>}</article>):<div className="empty-state-box"><ShieldCheck size={25}/><strong>No appeals waiting</strong><p>New appeals will appear here.</p></div>}</div>}
+      {settingsTab==="Support inbox"&&isVerificationAdmin&&<div className="verification-review">{supportInboxBusy?<p className="muted">Loading support requests…</p>:supportRequests.length?supportRequests.map(item=><article className="content-panel verification-application-card" key={item.id}><div className="section-title"><div><h3>{item.subject}</h3><span>{item.sender_name} · {item.sender_email}</span></div><span className={"welcome-pill appeal-status "+item.status}>{item.status.replace("_"," ")}</span></div><p><strong>{item.category}</strong></p><p>{item.details}</p><small>Request #{item.id} · {new Date(item.created_at).toLocaleString()}</small><div className="verification-actions"><button className="outline-button" onClick={()=>updateSupportStatus(item,"in_review")}>Mark in review</button><button className="primary-button" onClick={()=>updateSupportStatus(item,"resolved")}>Resolve</button></div></article>):<div className="empty-state-box"><Mail size={25}/><strong>No support requests</strong><p>New messages will appear here.</p></div>}</div>}
       {settingsTab==="Verification"&&<div className="verification-panel">
         <div className="verification-intro"><span className="welcome-pill"><ShieldCheck size={14}/> ACCOUNT AUTHENTICITY</span><h3>Request a verified badge</h3><p>Verification helps people recognise authentic accounts. Applications are reviewed by the Gist-Up team; submitting a request does not guarantee approval.</p></div>
         <div className="content-panel verification-policy">
@@ -1749,7 +1870,7 @@ function App() {
       {walletTab==="Creator earnings"&&<><div className="wallet-section-heading"><div><span className="eyebrow">CREATOR TOOLS</span><h3>Creator earnings</h3></div><BarChart3 size={20}/></div><div className="wallet-empty-state"><ShieldCheck size={28}/><strong>Earnings are not enabled</strong><p>There are no cash balances, withdrawals or payouts in this preview. Eligibility and adult-managed payment setup would be required before any future launch.</p></div></>}
     </section>;
   }
-  const page = active==="Wallet"?<WalletPage/>:active==="Home"?<HomePage/>:active==="Live"?<LivePage/>:active==="Explore"?<ExplorePage/>:active==="Communities"?<CommunitiesPage/>:active==="Messages"?MessagesPage():active==="Notifications"?<NotificationsPage/>:active==="Saved"?<SavedPage/>:active==="Profile"?(selectedProfile?<OtherProfilePage/>:<ProfilePage/>):active==="Creator Studio"?<CreatorStudioPage/>:active==="Gisty AI"?<AssistantPage/>:active==="Image Studio"?<ImageStudioPage/>:active==="Ads Manager"?<AdsManagerPage/>:active==="Settings & Privacy"?<SettingsPage/>:<HomePage />;
+  const page = authUser?.account_status==="suspended"||authUser?.account_status==="banned" ? <AccountAppealPage/> : active==="Wallet"?<WalletPage/>:active==="Home"?<HomePage/>:active==="Live"?<LivePage/>:active==="Explore"?<ExplorePage/>:active==="Communities"?<CommunitiesPage/>:active==="Messages"?MessagesPage():active==="Notifications"?<NotificationsPage/>:active==="Saved"?<SavedPage/>:active==="Profile"?(selectedProfile?<OtherProfilePage/>:<ProfilePage/>):active==="Creator Studio"?<CreatorStudioPage/>:active==="Gisty AI"?<AssistantPage/>:active==="Image Studio"?<ImageStudioPage/>:active==="Ads Manager"?<AdsManagerPage/>:active==="Help & Support"?<HelpSupportPage/>:active==="Settings & Privacy"?<SettingsPage/>:<HomePage />;
   return <div className="app-shell">
     <header className="topbar"><button className="mobile-menu icon-button" aria-label="Toggle navigation" onClick={()=>setMobileNav(!mobileNav)}>{mobileNav?<X size={20}/>:<Menu size={20}/>}</button><button className="brand" onClick={()=>go("Home")}><span className="brand-mark"><img src="/gist-up-mark.svg" alt="" /></span><span>gist<span className="brand-up">up</span></span></button><label className="searchbox"><Search size={18}/><input aria-label="Search" value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")go("Explore")}} placeholder="Search people, topics, and communities"/><kbd>⌘ K</kbd></label><div className="top-actions"><button className="icon-button" aria-label="Notifications" onClick={()=>go("Notifications")}><Bell size={20}/><i/></button><button className="top-profile" onClick={()=>go("Profile")}><Avatar initials={myInitials} size="small" imageUrl={authUser?.avatar_url}/><span className="profile-name">{displayName} {authUser?.is_verified&&<VerifiedBadge size={13}/>}</span></button></div></header>
     {notice&&<div className="toast" role="status">{notice}</div>}
