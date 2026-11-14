@@ -86,6 +86,10 @@ function publicUser(row) {
     avatar_url: row.avatar_url || null,
     cover_url: row.cover_url || null,
     is_verified: row.is_verified === true,
+    account_status: row.account_status || "active",
+    account_status_reason: row.account_status_reason || "",
+    account_status_action: row.account_status_action || "active",
+    account_suspension_until: row.account_suspension_until || null,
     created_at: row.created_at
   };
 }
@@ -129,11 +133,18 @@ async function authenticate(req, res, next) {
   try {
     const payload = jwt.verify(token, JWT_SECRET, { issuer: "gist-up" });
     const result = await pool.query(
-      "SELECT id, email, full_name, username, bio, avatar_url, cover_url, is_verified, created_at FROM users WHERE id = $1 LIMIT 1",
+      "SELECT id, email, full_name, username, bio, avatar_url, cover_url, is_verified, account_status, account_status_reason, account_status_action, account_suspension_until, created_at FROM users WHERE id = $1 LIMIT 1",
       [payload.sub]
     );
     if (!result.rowCount) return res.status(401).json({ error: "Your session is no longer valid. Please log in again." });
     req.user = publicUser(result.rows[0]);
+    const allowedDuringRestriction = req.path === "/api/auth/me" || req.path === "/api/auth/logout" || req.path.startsWith("/api/account/appeals") || req.path.startsWith("/api/support");
+    if ((req.user.account_status === "suspended" || req.user.account_status === "banned") && !allowedDuringRestriction) {
+      return res.status(403).json({ error: "Your account is currently " + req.user.account_status + ". You can still submit an appeal or contact support.", accountStatus: req.user.account_status });
+    }
+    if (req.user.account_status === "restricted" && req.method !== "GET" && !allowedDuringRestriction) {
+      return res.status(403).json({ error: "Some account features are temporarily restricted. Contact support or submit an appeal for a review.", accountStatus: "restricted" });
+    }
     next();
   } catch {
     res.clearCookie("gistup_session", { httpOnly: true, secure: isProduction, sameSite: isProduction ? "none" : "lax", path: "/" });
@@ -653,7 +664,7 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
   if (!email || !password) return res.status(400).json({ error: "Enter your email address and password." });
   try {
     const result = await pool.query(
-      "SELECT id, email, full_name, username, bio, avatar_url, password_hash, created_at FROM users WHERE email = $1 LIMIT 1",
+      "SELECT id, email, full_name, username, bio, avatar_url, password_hash, account_status, account_status_reason, account_status_action, account_suspension_until, created_at FROM users WHERE email = $1 LIMIT 1",
       [email]
     );
     const row = result.rows[0];
@@ -794,6 +805,128 @@ app.patch("/api/profile/me", authenticate, async (req, res) => {
 
 const verificationAdminEmail = String(process.env.GISTUP_ADMIN_EMAIL || "gistup.admin@gmail.com").trim().toLowerCase();
 function isVerificationAdmin(req) { return String(req.user?.email || "").toLowerCase() === verificationAdminEmail; }
+
+app.post("/api/support/requests", authenticate, authLimiter, async (req, res) => {
+  const category = String(req.body?.category || "").trim();
+  const subject = String(req.body?.subject || "").trim();
+  const details = String(req.body?.details || "").trim();
+  const allowedCategories = ["Account & login","Posts, photos & videos","Live streaming","Wallet & gifts","Verification","Safety & privacy","Other"];
+  if (!allowedCategories.includes(category)) return res.status(400).json({ error: "Choose a support topic." });
+  if (subject.length < 4 || subject.length > 140) return res.status(400).json({ error: "Enter a subject between 4 and 140 characters." });
+  if (details.length < 15 || details.length > 3000) return res.status(400).json({ error: "Please describe the issue in 15–3,000 characters." });
+  try {
+    const result = await pool.query(
+      "INSERT INTO support_requests (user_id, sender_name, sender_email, category, subject, details) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, status, created_at",
+      [req.user.id, req.user.full_name, req.user.email, category, subject, details]
+    );
+    if (mailTransport) {
+      try {
+        await mailTransport.sendMail({
+          from: process.env.GISTUP_FROM_EMAIL || process.env.SMTP_USER,
+          to: verificationAdminEmail,
+          subject: "New Gist-Up support request #" + result.rows[0].id,
+          text: "A support request was submitted.\nFrom: " + req.user.full_name + " (" + req.user.email + ")\nTopic: " + category + "\nSubject: " + subject + "\n\n" + details + "\n\nReview it in Gist-Up Settings & Privacy > Support inbox."
+        });
+      } catch (mailError) { console.error("Support notification email failed:", mailError?.message || "unknown error"); }
+    }
+    return res.status(201).json({ request: result.rows[0], message: "Your request has been received. You can keep this reference number: #" + result.rows[0].id });
+  } catch (error) {
+    console.error("Support request failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't send your support request. Please try again." });
+  }
+});
+
+app.get("/api/account/appeals/me", authenticate, async (req,res) => {
+  try {
+    const result = await pool.query("SELECT id, account_status_at_submission, reason, status, reviewer_note, created_at, reviewed_at FROM account_appeals WHERE user_id=$1 ORDER BY created_at DESC LIMIT 5",[req.user.id]);
+    res.json({ appeals: result.rows });
+  } catch (error) { console.error("Account appeal status failed:",error?.message||error); res.status(500).json({error:"We couldn't load your appeal status."}); }
+});
+
+app.post("/api/account/appeals", authenticate, authLimiter, async (req,res) => {
+  const reason=String(req.body?.reason||"").trim();
+  if (!["restricted","suspended","banned"].includes(req.user.account_status)) return res.status(409).json({error:"Your account does not currently have an active restriction to appeal."});
+  if (reason.length<30 || reason.length>2000) return res.status(400).json({error:"Please explain your appeal in 30–2,000 characters."});
+  try {
+    const existing=await pool.query("SELECT id FROM account_appeals WHERE user_id=$1 AND status='pending' LIMIT 1",[req.user.id]);
+    if(existing.rowCount)return res.status(409).json({error:"You already have an appeal waiting for review."});
+    const result=await pool.query("INSERT INTO account_appeals (user_id,account_status_at_submission,reason) VALUES ($1,$2,$3) RETURNING id,status,created_at",[req.user.id,req.user.account_status,reason]);
+    if(mailTransport){try{await mailTransport.sendMail({from:process.env.GISTUP_FROM_EMAIL||process.env.SMTP_USER,to:verificationAdminEmail,subject:"New Gist-Up account appeal #"+result.rows[0].id,text:"A user submitted an account appeal. Sign in to Gist-Up and open Settings & Privacy > Appeals to review it."});}catch(mailError){console.error("Appeal notification email failed:",mailError?.message||mailError);}}
+    res.status(201).json({appeal:result.rows[0],message:"Your appeal has been submitted for review."});
+  } catch(error){console.error("Account appeal submission failed:",error?.message||error);res.status(500).json({error:"We couldn't submit your appeal. Please try again."});}
+});
+
+app.get("/api/admin/accounts", authenticate, async (req,res) => {
+  if(!isVerificationAdmin(req))return res.status(403).json({error:"Administrator access is required."});
+  const query=String(req.query?.q||"").trim().slice(0,80);
+  try{
+    const result=await pool.query(
+      `SELECT id,full_name,email,username,account_status,account_status_action,account_status_reason,account_suspension_until,account_status_updated_at,created_at
+       FROM users WHERE ($1='' OR email ILIKE '%'||$1||'%' OR username ILIKE '%'||$1||'%' OR full_name ILIKE '%'||$1||'%')
+       ORDER BY account_status_updated_at DESC NULLS LAST,created_at DESC LIMIT 100`,[query]);
+    res.json({accounts:result.rows});
+  }catch(error){console.error("Admin accounts fetch failed:",error?.message||error);res.status(500).json({error:"We couldn't load accounts for moderation."});}
+});
+
+app.post("/api/admin/accounts/:id/moderation", authenticate, async (req,res) => {
+  if(!isVerificationAdmin(req))return res.status(403).json({error:"Administrator access is required."});
+  const action=String(req.body?.action||"");
+  const reason=String(req.body?.reason||"").trim().slice(0,500);
+  const days=Number(req.body?.days||0);
+  if(!["warn","restricted","suspended","banned","restore"].includes(action))return res.status(400).json({error:"Choose a valid moderation action."});
+  if(action!=="restore" && reason.length<10)return res.status(400).json({error:"Add a clear reason of at least 10 characters."});
+  if(action==="suspended" && (!Number.isInteger(days)||days<1||days>365))return res.status(400).json({error:"Choose a suspension duration from 1 to 365 days."});
+  try{
+    const target=await pool.query("SELECT id,email,full_name,account_status FROM users WHERE id=$1 LIMIT 1",[req.params.id]);
+    if(!target.rowCount)return res.status(404).json({error:"Account not found."});
+    if(String(target.rows[0].id)===String(req.user.id))return res.status(400).json({error:"You cannot moderate your own administrator account."});
+    const status=action==="warn"?"active":action==="restore"?"active":action;
+    const until=action==="suspended"?new Date(Date.now()+days*86400000).toISOString():null;
+    await pool.query("UPDATE users SET account_status=$1,account_status_action=$2,account_status_reason=$3,account_suspension_until=$4,account_status_updated_at=NOW() WHERE id=$5",[status,action,reason,until,req.params.id]);
+    if(mailTransport){try{await mailTransport.sendMail({from:process.env.GISTUP_FROM_EMAIL||process.env.SMTP_USER,to:target.rows[0].email,subject:action==="warn"?"A notice from Gist-Up":action==="restore"?"Your Gist-Up account has been restored":"An update about your Gist-Up account",text:action==="warn"?"Gist-Up has issued an account warning. Reason: "+reason:action==="restore"?"Your account access has been restored.": "Your account status is now "+status+". Reason: "+reason+(until?"\nSuspension ends: "+until:"")+"\nYou can sign in to submit an appeal or contact support."});}catch(mailError){console.error("Moderation email failed:",mailError?.message||mailError);}}
+    res.json({ok:true,account:{id:target.rows[0].id,account_status:status,account_status_action:action,account_status_reason:reason,account_suspension_until:until}});
+  }catch(error){console.error("Account moderation failed:",error?.message||error);res.status(500).json({error:"We couldn't update this account."});}
+});
+
+app.get("/api/admin/appeals", authenticate, async (req,res) => {
+  if(!isVerificationAdmin(req))return res.status(403).json({error:"Administrator access is required."});
+  try{
+    const result=await pool.query(`SELECT a.id,a.reason,a.status,a.account_status_at_submission,a.reviewer_note,a.created_at,a.reviewed_at,u.id AS user_id,u.full_name,u.email,u.username,u.account_status
+      FROM account_appeals a JOIN users u ON u.id=a.user_id ORDER BY CASE WHEN a.status='pending' THEN 0 ELSE 1 END,a.created_at DESC LIMIT 100`);
+    res.json({appeals:result.rows});
+  }catch(error){console.error("Admin appeals fetch failed:",error?.message||error);res.status(500).json({error:"We couldn't load appeals."});}
+});
+
+app.patch("/api/admin/appeals/:id", authenticate, async (req,res) => {
+  if(!isVerificationAdmin(req))return res.status(403).json({error:"Administrator access is required."});
+  const decision=String(req.body?.decision||"");
+  const note=String(req.body?.reviewerNote||"").trim().slice(0,500);
+  if(!["approved","rejected"].includes(decision))return res.status(400).json({error:"Choose approve or reject."});
+  if(note.length<5)return res.status(400).json({error:"Add a short explanation for the decision."});
+  try{
+    const appeal=await pool.query("SELECT id,user_id FROM account_appeals WHERE id=$1 AND status='pending' LIMIT 1",[req.params.id]);
+    if(!appeal.rowCount)return res.status(404).json({error:"Pending appeal not found."});
+    await pool.query("UPDATE account_appeals SET status=$1,reviewer_note=$2,reviewed_at=NOW() WHERE id=$3",[decision,note,req.params.id]);
+    if(decision==="approved")await pool.query("UPDATE users SET account_status='active',account_status_action='restore',account_status_reason='',account_suspension_until=NULL,account_status_updated_at=NOW() WHERE id=$1",[appeal.rows[0].user_id]);
+    const user=await pool.query("SELECT email FROM users WHERE id=$1",[appeal.rows[0].user_id]);
+    if(mailTransport&&user.rowCount){try{await mailTransport.sendMail({from:process.env.GISTUP_FROM_EMAIL||process.env.SMTP_USER,to:user.rows[0].email,subject:decision==="approved"?"Your Gist-Up appeal was approved":"An update on your Gist-Up appeal",text:(decision==="approved"?"Your appeal was approved and your account access has been restored.":"Your appeal was not approved.")+"\nReview note: "+note});}catch(mailError){console.error("Appeal decision email failed:",mailError?.message||mailError);}}
+    res.json({ok:true,decision,reviewerNote:note});
+  }catch(error){console.error("Appeal review failed:",error?.message||error);res.status(500).json({error:"We couldn't save the appeal decision."});}
+});
+
+app.get("/api/admin/support", authenticate, async (req,res) => {
+  if(!isVerificationAdmin(req))return res.status(403).json({error:"Administrator access is required."});
+  try{const result=await pool.query("SELECT id,user_id,sender_name,sender_email,category,subject,details,status,created_at FROM support_requests ORDER BY CASE WHEN status='open' THEN 0 WHEN status='in_review' THEN 1 ELSE 2 END,created_at DESC LIMIT 100");res.json({requests:result.rows});}
+  catch(error){console.error("Support inbox fetch failed:",error?.message||error);res.status(500).json({error:"We couldn't load support requests."});}
+});
+
+app.patch("/api/admin/support/:id", authenticate, async (req,res) => {
+  if(!isVerificationAdmin(req))return res.status(403).json({error:"Administrator access is required."});
+  const status=String(req.body?.status||"");
+  if(!["open","in_review","resolved"].includes(status))return res.status(400).json({error:"Choose a valid support status."});
+  try{const result=await pool.query("UPDATE support_requests SET status=$1,updated_at=NOW() WHERE id=$2 RETURNING id,status",[status,req.params.id]);if(!result.rowCount)return res.status(404).json({error:"Support request not found."});res.json({request:result.rows[0]});}
+  catch(error){console.error("Support request update failed:",error?.message||error);res.status(500).json({error:"We couldn't update this request."});}
+});
 
 app.get("/api/verification/me", authenticate, async (req, res) => {
   try {
@@ -1854,6 +1987,42 @@ async function start() {
       await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users (username)");
 
       await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT FALSE");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS account_status VARCHAR(20) NOT NULL DEFAULT 'active'");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS account_status_reason VARCHAR(500) NOT NULL DEFAULT ''");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS account_status_action VARCHAR(20) NOT NULL DEFAULT 'active'");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS account_suspension_until TIMESTAMPTZ");
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS account_status_updated_at TIMESTAMPTZ");
+      await pool.query("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_account_status_check");
+      await pool.query("ALTER TABLE users ADD CONSTRAINT users_account_status_check CHECK (account_status IN ('active','restricted','suspended','banned'))");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS support_requests (
+          id BIGSERIAL PRIMARY KEY,
+          user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+          sender_name VARCHAR(100) NOT NULL,
+          sender_email VARCHAR(254) NOT NULL,
+          category VARCHAR(60) NOT NULL,
+          subject VARCHAR(140) NOT NULL,
+          details VARCHAR(3000) NOT NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'open' CHECK (status IN ('open','in_review','resolved')),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS support_requests_status_created_idx ON support_requests (status, created_at DESC)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS account_appeals (
+          id BIGSERIAL PRIMARY KEY,
+          user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          account_status_at_submission VARCHAR(20) NOT NULL,
+          reason VARCHAR(2000) NOT NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+          reviewer_note VARCHAR(500) NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          reviewed_at TIMESTAMPTZ
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS account_appeals_status_created_idx ON account_appeals (status, created_at ASC)");
+      await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS account_appeals_one_pending_per_user ON account_appeals (user_id) WHERE status = 'pending'");
       await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS live_host_eligible BOOLEAN NOT NULL DEFAULT FALSE");
       await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS live_age_checked_at TIMESTAMPTZ");
       await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS live_rules_version VARCHAR(30)");
