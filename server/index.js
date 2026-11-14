@@ -132,6 +132,10 @@ async function authenticate(req, res, next) {
   if (!token) return res.status(401).json({ error: "Please log in to continue." });
   try {
     const payload = jwt.verify(token, JWT_SECRET, { issuer: "gist-up" });
+    await pool.query(
+      "UPDATE users SET account_status='active', account_status_action='restore', account_status_reason='', account_suspension_until=NULL, account_status_updated_at=NOW() WHERE id=$1 AND account_status='suspended' AND account_suspension_until IS NOT NULL AND account_suspension_until <= NOW()",
+      [payload.sub]
+    );
     const result = await pool.query(
       "SELECT id, email, full_name, username, bio, avatar_url, cover_url, is_verified, account_status, account_status_reason, account_status_action, account_suspension_until, created_at FROM users WHERE id = $1 LIMIT 1",
       [payload.sub]
