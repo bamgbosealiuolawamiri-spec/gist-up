@@ -197,3 +197,16 @@
 .live-chat-compose input{min-width:0;flex:1;padding:11px 12px;border:1px solid var(--border,#ddd);border-radius:10px;background:transparent;color:inherit}
 .live-reactions{display:flex;gap:8px}
 @media(max-width:560px){.live-broadcast-row{align-items:flex-start;flex-direction:column}.live-chat-compose{flex-wrap:wrap}.live-chat-compose button{width:100%}}
+
+
+/* Public Live double-tap likes */
+.live-interactive-frame{touch-action:pan-y;cursor:pointer}
+.live-like-counter{position:absolute;z-index:2;top:12px;right:12px;display:flex;align-items:center;gap:6px;padding:8px 11px;border-radius:999px;background:rgba(20,16,30,.78);color:#fff;font-size:13px;pointer-events:none;backdrop-filter:blur(8px)}
+.live-like-counter svg{color:#ff5d91}
+.live-like-counter span{opacity:.82;font-size:11px}
+.live-like-actions{display:flex;align-items:center;gap:10px;margin-top:9px}
+.live-like-actions .outline-button{display:inline-flex;align-items:center;gap:7px}
+.live-like-actions>span{font-size:12px;color:var(--muted,#777)}
+.live-like-burst{position:absolute;z-index:3;left:50%;top:48%;transform:translate(-50%,-50%);color:#ff5d91;font-size:76px;line-height:1;pointer-events:none;text-shadow:0 4px 18px #0008;animation:liveLikePop .75s ease-out forwards}
+@keyframes liveLikePop{0%{opacity:0;transform:translate(-50%,-35%) scale(.35)}25%{opacity:1;transform:translate(-50%,-55%) scale(1.15)}100%{opacity:0;transform:translate(-50%,-135%) scale(1)}}
+@media(prefers-reduced-motion:reduce){.live-like-burst{animation:none;opacity:1}}

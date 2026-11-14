@@ -445,12 +445,13 @@ app.get("/api/public-live/:id/state", authenticate, liveLimiter, async (req, res
       const active = await pool.query("UPDATE public_live_viewers SET last_seen_at=NOW() WHERE room_id=$1 AND user_id=$2 AND removed_at IS NULL RETURNING user_id", [room.id, req.user.id]);
       if (!active.rowCount) return res.status(403).json({ error: "You are not an active viewer." });
     }
-    const [viewers, messages, signals] = await Promise.all([
+    const [viewers, messages, signals, likes] = await Promise.all([
       getPublicLiveViewers(room.id),
       pool.query("SELECT m.id,m.message_type,m.body,m.created_at,u.id AS user_id,u.full_name,u.username FROM public_live_messages m JOIN users u ON u.id=m.user_id WHERE m.room_id=$1 AND m.id>$2 ORDER BY m.id LIMIT 80", [room.id, Math.max(0,Number(req.query.afterMessage)||0)]),
-      pool.query("SELECT id,sender_user_id,signal_type,payload FROM public_live_signals WHERE room_id=$1 AND recipient_user_id=$2 AND id>$3 ORDER BY id LIMIT 100", [room.id, req.user.id, Math.max(0,Number(req.query.afterSignal)||0)])
+      pool.query("SELECT id,sender_user_id,signal_type,payload FROM public_live_signals WHERE room_id=$1 AND recipient_user_id=$2 AND id>$3 ORDER BY id LIMIT 100", [room.id, req.user.id, Math.max(0,Number(req.query.afterSignal)||0)]),
+      pool.query("SELECT COALESCE(SUM(like_count),0)::int AS likes_count FROM public_live_likes WHERE room_id=$1", [room.id])
     ]);
-    res.json({ room: { id: room.id,title: room.title,host_user_id: room.host_user_id,host_name: room.host_name,comments_enabled: room.comments_enabled }, viewers, messages: messages.rows, signals: signals.rows });
+    res.json({ room: { id: room.id,title: room.title,host_user_id: room.host_user_id,host_name: room.host_name,comments_enabled: room.comments_enabled }, viewers, messages: messages.rows, signals: signals.rows, likes_count: likes.rows[0]?.likes_count || 0 });
   } catch (error) { console.error("Public Live state failed:", error?.message || error); res.status(500).json({ error: "Couldn't refresh the broadcast." }); }
 });
 app.post("/api/public-live/:id/signals", authenticate, liveLimiter, async (req, res) => {
@@ -479,6 +480,18 @@ app.post("/api/public-live/:id/messages", authenticate, liveLimiter, async (req,
     const result=await pool.query("INSERT INTO public_live_messages (room_id,user_id,message_type,body) VALUES ($1,$2,$3,$4) RETURNING id,message_type,body,created_at",[room.id,req.user.id,type,body]);
     res.status(201).json({message:{...result.rows[0],user_id:req.user.id,full_name:req.user.full_name,username:req.user.username}});
   } catch(error){console.error("Public Live message failed:",error?.message||error);res.status(500).json({error:"Couldn't send that interaction."});}
+});
+app.post("/api/public-live/:id/likes", authenticate, liveLimiter, async (req,res)=>{
+  try{
+    const room=await getPublicLiveRoom(req.params.id);
+    if(!room)return res.status(404).json({error:"Broadcast ended."});
+    const host=String(room.host_user_id)===String(req.user.id);
+    const member=host||(await pool.query("SELECT 1 FROM public_live_viewers WHERE room_id=$1 AND user_id=$2 AND removed_at IS NULL",[room.id,req.user.id])).rowCount>0;
+    if(!member)return res.status(403).json({error:"Join the broadcast before liking."});
+    await pool.query("INSERT INTO public_live_likes (room_id,user_id,like_count,updated_at) VALUES ($1,$2,1,NOW()) ON CONFLICT (room_id,user_id) DO UPDATE SET like_count=public_live_likes.like_count+1,updated_at=NOW()",[room.id,req.user.id]);
+    const count=await pool.query("SELECT COALESCE(SUM(like_count),0)::int AS likes_count FROM public_live_likes WHERE room_id=$1",[room.id]);
+    res.status(201).json({likes_count:count.rows[0]?.likes_count||0});
+  }catch(error){console.error("Public Live like failed:",error?.message||error);res.status(500).json({error:"Couldn't send your like."});}
 });
 app.post("/api/public-live/:id/moderation", authenticate, liveLimiter, async (req,res)=>{
   const action=String(req.body?.action||""), target=String(req.body?.userId||"");
@@ -1994,6 +2007,13 @@ async function start() {
         body VARCHAR(300) NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`);
       await pool.query("CREATE INDEX IF NOT EXISTS public_live_messages_room_idx ON public_live_messages (room_id, id)");
+      await pool.query(`CREATE TABLE IF NOT EXISTS public_live_likes (
+        room_id BIGINT NOT NULL REFERENCES public_live_rooms(id) ON DELETE CASCADE,
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        like_count INTEGER NOT NULL DEFAULT 0 CHECK (like_count >= 0),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (room_id,user_id)
+      )`);
       await pool.query(`CREATE TABLE IF NOT EXISTS public_live_signals (
         id BIGSERIAL PRIMARY KEY, room_id BIGINT NOT NULL REFERENCES public_live_rooms(id) ON DELETE CASCADE,
         sender_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

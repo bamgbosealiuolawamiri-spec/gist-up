@@ -115,6 +115,9 @@ function App() {
   const [publicError, setPublicError] = useState("");
   const [publicRemoteStream, setPublicRemoteStream] = useState(null);
   const [publicCommentsEnabled, setPublicCommentsEnabled] = useState(true);
+  const [publicLikesCount, setPublicLikesCount] = useState(0);
+  const [publicLikePulse, setPublicLikePulse] = useState(0);
+  const lastPublicTapRef = useRef(0);
   const publicPollRef = useRef(null);
   const publicPeerRef = useRef(new Map());
   const publicSignalCursorRef = useRef(0);
@@ -1478,7 +1481,7 @@ function App() {
         const url=API_BASE+"/api/public-live/"+encodeURIComponent(room.id)+"/state?afterSignal="+publicSignalCursorRef.current+"&afterMessage="+publicMessageCursorRef.current;
         const r=await fetch(url,{credentials:"include"});const d=await r.json().catch(()=>({}));
         if(!r.ok)throw new Error(d.error||"This broadcast is no longer available.");
-        setPublicViewers(d.viewers||[]);setPublicCommentsEnabled(d.room?.comments_enabled!==false);
+        setPublicViewers(d.viewers||[]);setPublicCommentsEnabled(d.room?.comments_enabled!==false);setPublicLikesCount(Number(d.likes_count)||0);
         if(d.messages?.length){setPublicMessages(old=>[...old,...d.messages].slice(-80));publicMessageCursorRef.current=Math.max(publicMessageCursorRef.current,...d.messages.map(x=>Number(x.id)||0));}
         if(role==="host")for(const person of (d.viewers||[]))if(!publicPeerRef.current.has(String(person.id)))createPublicPeer(room,person,true,role);
         for(const signal of (d.signals||[])){
@@ -1526,6 +1529,22 @@ function App() {
       if(type==="comment")setPublicMessageText("");
     }catch(e){setPublicError(e.message||"Couldn't send that interaction.");}
   }
+  async function sendPublicLike() {
+    if(!publicRoom)return;
+    try{
+      const r=await fetch(API_BASE+"/api/public-live/"+encodeURIComponent(publicRoom.id)+"/likes",{method:"POST",credentials:"include"});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok)throw new Error(d.error||"Couldn't send your like.");
+      setPublicLikesCount(Number(d.likes_count)||0);
+      setPublicLikePulse(value=>value+1);
+    }catch(e){setPublicError(e.message||"Couldn't send your like.");}
+  }
+  function handlePublicVideoTap(event) {
+    const now=Date.now();
+    if(now-lastPublicTapRef.current<320){event.preventDefault();lastPublicTapRef.current=0;sendPublicLike();}
+    else lastPublicTapRef.current=now;
+  }
+
   async function moderatePublicLive(action,userId,enabled) {
     if(!publicRoom)return;
     try{
@@ -1632,7 +1651,7 @@ function App() {
           {!publicRooms.length?<div className="empty-state-box"><Video size={24}/><strong>No public broadcasts right now</strong><p>When creators go live, they will appear here.</p></div>:<div className="live-broadcast-list">{publicRooms.map(room=><div className="live-broadcast-row" key={room.id}><div><strong>{room.title}</strong><p>{room.host_name||room.host_username} · {room.viewer_count||0} watching</p></div><button className="primary-button compact" onClick={()=>joinPublicLive(room)}>Watch Live</button></div>)}</div>}
         </>:<>
           <div className="live-session-card"><div className="section-title"><span className="welcome-pill">{publicRole==="host"?"YOU ARE LIVE":"WATCHING LIVE"}</span><strong>{publicViewers.length} watching</strong></div><h3>{publicRoom.title}</h3>
-            <div className="live-preview-frame">{publicRole==="host"&&liveStream?<video className="live-camera-video" autoPlay muted playsInline ref={el=>{if(el&&el.srcObject!==liveStream)el.srcObject=liveStream;}}/>:publicRemoteStream?<video className="live-camera-video" autoPlay playsInline ref={el=>{if(el&&el.srcObject!==publicRemoteStream)el.srcObject=publicRemoteStream;}}/>:<div className="live-preview-placeholder"><Video size={30}/><strong>{publicRole==="host"?"Your broadcast is live":"Connecting to creator…"}</strong></div>}</div>
+            <div className="live-preview-frame live-interactive-frame" onPointerUp={handlePublicVideoTap} aria-label="Double-tap the video to like this Live"><div className="live-like-counter" aria-live="polite"><Heart size={17} fill="currentColor"/><strong>{publicLikesCount.toLocaleString()}</strong><span>likes</span></div>{publicLikePulse>0&&<span key={publicLikePulse} className="live-like-burst" aria-hidden="true">♥</span>}{publicRole==="host"&&liveStream?<video className="live-camera-video" autoPlay muted playsInline ref={el=>{if(el&&el.srcObject!==liveStream)el.srcObject=liveStream;}}/>:publicRemoteStream?<video className="live-camera-video" autoPlay playsInline ref={el=>{if(el&&el.srcObject!==publicRemoteStream)el.srcObject=publicRemoteStream;}}/>:<div className="live-preview-placeholder"><Video size={30}/><strong>{publicRole==="host"?"Your broadcast is live":"Connecting to creator…"}</strong></div>}</div><div className="live-like-actions"><button type="button" className="outline-button compact" onClick={sendPublicLike}><Heart size={15}/> Like</button><span>Double-tap the video to like</span></div>
             <h4>Viewers</h4><div className="live-viewer-list">{publicViewers.map(person=><div className="live-viewer-row" key={person.id}><span>{person.full_name||person.username}</span>{publicRole==="host"&&<button className="outline-button compact" onClick={()=>moderatePublicLive("remove",person.id)}>Remove</button>}</div>)}</div>
             <div className="live-chat-panel"><h4>Live chat</h4><div className="live-chat-messages">{publicMessages.map(msg=><p key={msg.id}><strong>{msg.full_name||msg.username||"Viewer"}:</strong> {msg.body}</p>)}</div>
               {publicCommentsEnabled?<div className="live-chat-compose"><input value={publicMessageText} maxLength={300} onChange={e=>setPublicMessageText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")sendPublicMessage("comment");}} placeholder="Write a comment…"/><button className="primary-button compact" onClick={()=>sendPublicMessage("comment")} disabled={!publicMessageText.trim()}>Send</button></div>:<p>Comments are paused by the host.</p>}
