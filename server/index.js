@@ -7,7 +7,6 @@ import jwt from "jsonwebtoken";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import nodemailer from "nodemailer";
 import { randomBytes } from "node:crypto";
 
 const { Pool } = pg;
@@ -156,41 +155,57 @@ async function authenticate(req, res, next) {
   }
 }
 
-function createMailTransport() {
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 465);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  if (!host || !user || !pass) return null;
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure: String(process.env.SMTP_SECURE || "true").toLowerCase() === "true",
-    auth: { user, pass }
+async function sendAppEmail({ to, subject, text }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.GISTUP_FROM_EMAIL;
+  if (!apiKey) throw new Error("RESEND_API_KEY is not configured");
+  if (!from) throw new Error("GISTUP_FROM_EMAIL is not configured");
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ from, to, subject, text }),
+    signal: AbortSignal.timeout(10000)
   });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error("Resend API error " + response.status + ": " + String(result.message || result.name || "email request failed").slice(0, 240));
+  return result;
 }
 
-const mailTransport = createMailTransport();
+// Keep the existing call sites on one HTTPS-based mail adapter; no SMTP connection is used.
+const mailTransport = {
+  sendMail: ({ to, subject, text }) => sendAppEmail({ to, subject, text })
+};
+
+const messageEmailCooldown = new Map();
+function canSendMessageEmail(userId) {
+  const now = Date.now();
+  const key = String(userId);
+  const lastSent = messageEmailCooldown.get(key) || 0;
+  if (now - lastSent < 15 * 60 * 1000) return false;
+  messageEmailCooldown.set(key, now);
+  if (messageEmailCooldown.size > 5000) {
+    for (const [id, sentAt] of messageEmailCooldown) {
+      if (now - sentAt > 60 * 60 * 1000) messageEmailCooldown.delete(id);
+    }
+  }
+  return true;
+}
 
 app.post("/api/admin/email-test", authenticate, authLimiter, async (req, res) => {
-  const adminEmail = String(process.env.GISTUP_ADMIN_EMAIL || "").trim().toLowerCase();
-  if (!adminEmail || req.user.email.toLowerCase() !== adminEmail) {
+  const adminEmail = String(process.env.GISTUP_ADMIN_EMAIL || "gistup.admin@gmail.com").trim().toLowerCase();
+  if (req.user.email.toLowerCase() !== adminEmail) {
     return res.status(403).json({ error: "Administrator access is required." });
-  }
-  if (!mailTransport) {
-    return res.status(503).json({ error: "Email is not configured. Check the SMTP settings in the hosting dashboard." });
   }
   try {
     await mailTransport.sendMail({
-      from: process.env.GISTUP_FROM_EMAIL || process.env.SMTP_USER,
       to: adminEmail,
       subject: "Gist-Up email setup test",
-      text: "Your Gist-Up email connection is working. This is a private test message sent to the administrator inbox."
+      text: "Your Gist-Up email connection is working through the Resend email API. This is a private test message sent to the administrator inbox."
     });
-    return res.json({ ok: true, message: "A test email was sent to the administrator inbox." });
+    return res.json({ ok: true, message: "A test email request was accepted by Resend for the administrator inbox." });
   } catch (error) {
     console.error("Admin email test failed:", error?.message || "unknown error");
-    return res.status(502).json({ error: "Gist-Up could not send the test email. Check the SMTP credentials and try again." });
+    return res.status(502).json({ error: "Gist-Up could not send the test email. Check the Resend API key and verified sender settings." });
   }
 });
 
@@ -1925,6 +1940,17 @@ app.post("/api/conversations/:id/messages", authenticate, async (req, res) => {
       "INSERT INTO notifications (recipient_id, actor_id, type) SELECT recipient.id, $2, 'message' FROM conversations c CROSS JOIN LATERAL (SELECT CASE WHEN c.user_a_id = $2 THEN c.user_b_id ELSE c.user_a_id END AS id) recipient WHERE c.id = $1 AND COALESCE((SELECT (preferences->>'notificationsMessages')::boolean FROM user_settings WHERE user_id = recipient.id), TRUE)",
       [req.params.id, req.user.id]
     );
+    const recipient = await pool.query(
+      "SELECT u.id, u.email, COALESCE((s.preferences->>'notificationsMessages')::boolean, TRUE) AS email_messages_enabled FROM conversations c JOIN users u ON u.id = CASE WHEN c.user_a_id = $2 THEN c.user_b_id ELSE c.user_a_id END LEFT JOIN user_settings s ON s.user_id = u.id WHERE c.id = $1 LIMIT 1",
+      [req.params.id, req.user.id]
+    );
+    if (recipient.rowCount && recipient.rows[0].email_messages_enabled && canSendMessageEmail(recipient.rows[0].id)) {
+      sendAppEmail({
+        to: recipient.rows[0].email,
+        subject: "You have a new message on Gist-Up",
+        text: (req.user.full_name || "Someone") + " sent you a message on Gist-Up. Sign in to your account to read and reply. For privacy, the message itself is not included in this email."
+      }).catch(mailError => console.error("Direct message email notification failed:", mailError?.message || "unknown error"));
+    }
     res.status(201).json({ message: result.rows[0] });
   } catch (error) {
     console.error("Message send failed:", error?.message || "unknown error");
