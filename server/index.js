@@ -1438,7 +1438,7 @@ app.post("/api/users/:id/report", authenticate, async (req, res) => {
   const reason = String(req.body?.reason || "");
   const details = String(req.body?.details || "").trim();
   const targetId = String(req.params.id || "");
-  if (!/^\\d+$/.test(targetId) || targetId === String(req.user.id)) return res.status(400).json({ error: "Choose a valid account to report." });
+  if (!/^\d+$/.test(targetId) || targetId === String(req.user.id)) return res.status(400).json({ error: "Choose a valid account to report." });
   if (!allowedReasons.includes(reason)) return res.status(400).json({ error: "Choose a report reason." });
   if (details.length > 500) return res.status(400).json({ error: "Additional details must be 500 characters or fewer." });
   try {
