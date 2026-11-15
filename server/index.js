@@ -1433,6 +1433,65 @@ app.post("/api/posts/:id/report", authenticate, async (req, res) => {
   }
 });
 
+app.post("/api/users/:id/report", authenticate, async (req, res) => {
+  const allowedReasons = ["Spam", "Harassment or bullying", "Hate or abuse", "Impersonation", "Other"];
+  const reason = String(req.body?.reason || "");
+  const details = String(req.body?.details || "").trim();
+  const targetId = String(req.params.id || "");
+  if (!/^\\d+$/.test(targetId) || targetId === String(req.user.id)) return res.status(400).json({ error: "Choose a valid account to report." });
+  if (!allowedReasons.includes(reason)) return res.status(400).json({ error: "Choose a report reason." });
+  if (details.length > 500) return res.status(400).json({ error: "Additional details must be 500 characters or fewer." });
+  try {
+    const target = await pool.query("SELECT id FROM users WHERE id = $1 LIMIT 1", [targetId]);
+    if (!target.rowCount) return res.status(404).json({ error: "Account not found." });
+    await pool.query(
+      `INSERT INTO user_reports (reporter_id, reported_user_id, reason, details)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (reporter_id, reported_user_id)
+       DO UPDATE SET reason = EXCLUDED.reason, details = EXCLUDED.details, status = 'pending', created_at = NOW()`,
+      [req.user.id, targetId, reason, details]
+    );
+    return res.status(201).json({ ok: true, message: "Thanks. Your account report has been sent for review." });
+  } catch (error) {
+    console.error("Account report failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't submit this account report right now." });
+  }
+});
+
+app.get("/api/admin/user-reports", authenticate, async (req, res) => {
+  if (!isVerificationAdmin(req)) return res.status(403).json({ error: "Administrator access is required." });
+  try {
+    const result = await pool.query(
+      `SELECT r.id, r.reason, r.details, r.status, r.created_at,
+              reporter.id AS reporter_id, reporter.full_name AS reporter_name, reporter.username AS reporter_username,
+              target.id AS reported_user_id, target.full_name AS reported_name, target.username AS reported_username
+       FROM user_reports r
+       JOIN users reporter ON reporter.id = r.reporter_id
+       JOIN users target ON target.id = r.reported_user_id
+       ORDER BY CASE WHEN r.status = 'pending' THEN 0 WHEN r.status = 'reviewing' THEN 1 ELSE 2 END, r.created_at DESC
+       LIMIT 100`
+    );
+    return res.json({ reports: result.rows });
+  } catch (error) {
+    console.error("Admin account reports fetch failed:", error?.message || error);
+    return res.status(500).json({ error: "We couldn't load account reports." });
+  }
+});
+
+app.patch("/api/admin/user-reports/:id", authenticate, async (req, res) => {
+  if (!isVerificationAdmin(req)) return res.status(403).json({ error: "Administrator access is required." });
+  const status = String(req.body?.status || "");
+  if (!["reviewing", "resolved", "dismissed"].includes(status)) return res.status(400).json({ error: "Choose a valid report status." });
+  try {
+    const result = await pool.query("UPDATE user_reports SET status = $1 WHERE id = $2 RETURNING id, status", [status, req.params.id]);
+    if (!result.rowCount) return res.status(404).json({ error: "Account report not found." });
+    return res.json({ report: result.rows[0] });
+  } catch (error) {
+    console.error("Admin account report update failed:", error?.message || error);
+    return res.status(500).json({ error: "We couldn't update this account report." });
+  }
+});
+
 app.get("/api/likes/me", authenticate, async (req, res) => {
   try {
     const result = await pool.query(
@@ -2198,6 +2257,20 @@ async function start() {
         )
       `);
       await pool.query("CREATE INDEX IF NOT EXISTS post_reports_status_created_idx ON post_reports (status, created_at DESC)");
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS user_reports (
+          id BIGSERIAL PRIMARY KEY,
+          reporter_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          reported_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          reason VARCHAR(40) NOT NULL CHECK (reason IN ('Spam', 'Harassment or bullying', 'Hate or abuse', 'Impersonation', 'Other')),
+          details VARCHAR(500) NOT NULL DEFAULT '',
+          status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'reviewing', 'resolved', 'dismissed')),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (reporter_id, reported_user_id),
+          CHECK (reporter_id <> reported_user_id)
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS user_reports_status_created_idx ON user_reports (status, created_at DESC)");
       await pool.query(`
         CREATE TABLE IF NOT EXISTS ad_campaigns (
           id BIGSERIAL PRIMARY KEY,
