@@ -199,6 +199,8 @@ function App() {
   const [supportBusy, setSupportBusy] = useState(false);
   const [supportRequests, setSupportRequests] = useState([]);
   const [supportInboxBusy, setSupportInboxBusy] = useState(false);
+  const [userReports, setUserReports] = useState([]);
+  const [userReportsBusy, setUserReportsBusy] = useState(false);
   const [moderationAccounts, setModerationAccounts] = useState([]);
   const [moderationQuery, setModerationQuery] = useState("");
   const [moderationBusy, setModerationBusy] = useState(false);
@@ -254,6 +256,30 @@ function App() {
         .catch(error => notify(error.message)).finally(() => setSupportInboxBusy(false));
     }
   }, [settingsTab, isVerificationAdmin]);
+  useEffect(() => {
+    if (!isVerificationAdmin || settingsTab !== "Account reports") return;
+    setUserReportsBusy(true);
+    fetch(API_BASE + "/api/admin/user-reports", { credentials: "include" })
+      .then(async response => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not load account reports.");
+        setUserReports(data.reports || []);
+      })
+      .catch(error => notify(error.message || "Could not load account reports."))
+      .finally(() => setUserReportsBusy(false));
+  }, [settingsTab, isVerificationAdmin]);
+  async function updateUserReportStatus(report, status) {
+    try {
+      const response = await fetch(API_BASE + "/api/admin/user-reports/" + encodeURIComponent(report.id), {
+        method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not update this account report.");
+      setUserReports(items => items.map(item => String(item.id) === String(report.id) ? { ...item, status: data.report?.status || status } : item));
+      notify("Report status updated.");
+    } catch (error) { notify(error.message || "Could not update this account report."); }
+  }
   async function submitSupportRequest() {
     setSupportBusy(true);
     try {
@@ -1404,7 +1430,7 @@ function App() {
     </div>;
   }
   function SettingsPage() {
-    const tabs=["Account","Verification","Privacy","Notifications","Appearance","Blocked accounts","Data & account","Help & Support", ...(isVerificationAdmin ? ["Verification review","Account moderation","Appeals","Support inbox"] : [])];
+    const tabs=["Account","Verification","Privacy","Notifications","Appearance","Blocked accounts","Data & account","Help & Support", ...(isVerificationAdmin ? ["Verification review","Account moderation","Appeals","Support inbox","Account reports"] : [])];
     const notificationOptions=[
       ["notificationsFollowers","New followers","When someone follows your account."],
       ["notificationsEngagement","Likes and comments","When people engage with your posts."],
@@ -1417,7 +1443,8 @@ function App() {
       {settingsTab==="Account moderation"&&isVerificationAdmin&&<div className="verification-review"><p className="muted">Search accounts and choose a proportionate action. Add a clear reason for every warning or restriction. Users can appeal account restrictions.</p><label className="auth-label">Find an account<input value={moderationQuery} onChange={e=>setModerationQuery(e.target.value)} placeholder="Search name, username or email"/></label>
         {moderationBusy?<p className="muted">Loading accounts…</p>:moderationAccounts.filter(a=>!moderationQuery||[a.full_name,a.username,a.email].some(v=>String(v||"").toLowerCase().includes(moderationQuery.toLowerCase()))).map(account=><article className="content-panel moderation-account-card" key={account.id}><div className="section-title"><div><h3>{account.full_name}</h3><span>@{account.username} · {account.email}</span></div><span className={"welcome-pill appeal-status "+account.account_status}>{account.account_status}</span></div>{account.account_status_reason&&<p className="preview-note">{account.account_status_reason}</p>}{account.account_suspension_until&&<small>Until {new Date(account.account_suspension_until).toLocaleString()}</small>}<div className="verification-actions"><button className="outline-button" onClick={()=>moderateAccount(account,"warn")}>Warn</button><button className="outline-button" onClick={()=>moderateAccount(account,"restricted")}>Restrict</button><button className="outline-button" onClick={()=>moderateAccount(account,"suspended")}>Suspend</button><button className="outline-button" onClick={()=>moderateAccount(account,"banned")}>Disable</button>{account.account_status!=="active"&&<button className="primary-button" onClick={()=>moderateAccount(account,"restore")}>Restore</button>}</div></article>)}</div>}
       {settingsTab==="Appeals"&&isVerificationAdmin&&<div className="verification-review">{appealsBusy?<p className="muted">Loading appeals…</p>:accountAppeals.length?accountAppeals.map(item=><article className="content-panel verification-application-card" key={item.id}><div className="section-title"><div><h3>{item.full_name} · @{item.username}</h3><span>{item.email} · Appeal #{item.id}</span></div><span className={"welcome-pill appeal-status "+item.status}>{item.status}</span></div><p>{item.reason}</p><small>Account status when submitted: {item.account_status_at_submission} · {new Date(item.created_at).toLocaleString()}</small>{item.reviewer_note&&<p className="preview-note">Decision note: {item.reviewer_note}</p>}{item.status==="pending"&&<div className="verification-actions"><button className="primary-button" onClick={()=>reviewAccountAppeal(item,"approved")}><Check size={14}/> Approve & restore</button><button className="outline-button" onClick={()=>reviewAccountAppeal(item,"rejected")}>Decline with reason</button></div>}</article>):<div className="empty-state-box"><ShieldCheck size={25}/><strong>No appeals waiting</strong><p>New appeals will appear here.</p></div>}</div>}
-      {settingsTab==="Support inbox"&&isVerificationAdmin&&<div className="verification-review">{supportInboxBusy?<p className="muted">Loading support requests…</p>:supportRequests.length?supportRequests.map(item=><article className="content-panel verification-application-card" key={item.id}><div className="section-title"><div><h3>{item.subject}</h3><span>{item.sender_name} · {item.sender_email}</span></div><span className={"welcome-pill appeal-status "+item.status}>{item.status.replace("_"," ")}</span></div><p><strong>{item.category}</strong></p><p>{item.details}</p><small>Request #{item.id} · {new Date(item.created_at).toLocaleString()}</small><div className="verification-actions"><button className="outline-button" onClick={()=>updateSupportStatus(item,"in_review")}>Mark in review</button><button className="primary-button" onClick={()=>updateSupportStatus(item,"resolved")}>Resolve</button></div></article>):<div className="empty-state-box"><Mail size={25}/><strong>No support requests</strong><p>New messages will appear here.</p></div>}</div>}
+      {settingsTab==="Account reports"&&isVerificationAdmin&&<div className="verification-review">{userReportsBusy?<p className="muted">Loading account reports…</p>:userReports.length?userReports.map(item=><article className="content-panel verification-application-card" key={item.id}><div className="section-title"><div><h3>{item.reported_name} · @{item.reported_username}</h3><span>Reported by {item.reporter_name} · @{item.reporter_username} · Report #{item.id}</span></div><span className={"welcome-pill appeal-status "+item.status}>{item.status}</span></div><p><strong>{item.reason}</strong></p>{item.details&&<p>{item.details}</p>}<small>Submitted {new Date(item.created_at).toLocaleString()}</small><div className="verification-actions">{item.status==="pending"&&<button className="outline-button" onClick={()=>updateUserReportStatus(item,"reviewing")}>Mark reviewing</button>}{item.status!=="resolved"&&<button className="primary-button" onClick={()=>updateUserReportStatus(item,"resolved")}>Resolve</button>}{item.status!=="dismissed"&&<button className="outline-button" onClick={()=>updateUserReportStatus(item,"dismissed")}>Dismiss</button>}</div></article>):<div className="empty-state-box"><Flag size={25}/><strong>No account reports</strong><p>Reports submitted by members will appear here for review.</p></div>}</div>}
+       {settingsTab==="Support inbox"&&isVerificationAdmin&&<div className="verification-review">{supportInboxBusy?<p className="muted">Loading support requests…</p>:supportRequests.length?supportRequests.map(item=><article className="content-panel verification-application-card" key={item.id}><div className="section-title"><div><h3>{item.subject}</h3><span>{item.sender_name} · {item.sender_email}</span></div><span className={"welcome-pill appeal-status "+item.status}>{item.status.replace("_"," ")}</span></div><p><strong>{item.category}</strong></p><p>{item.details}</p><small>Request #{item.id} · {new Date(item.created_at).toLocaleString()}</small><div className="verification-actions"><button className="outline-button" onClick={()=>updateSupportStatus(item,"in_review")}>Mark in review</button><button className="primary-button" onClick={()=>updateSupportStatus(item,"resolved")}>Resolve</button></div></article>):<div className="empty-state-box"><Mail size={25}/><strong>No support requests</strong><p>New messages will appear here.</p></div>}</div>}
       {settingsTab==="Verification"&&<div className="verification-panel">
         <div className="verification-intro"><span className="welcome-pill"><ShieldCheck size={14}/> ACCOUNT AUTHENTICITY</span><h3>Request a verified badge</h3><p>Verification helps people recognise authentic accounts. Applications are reviewed by the Gist-Up team; submitting a request does not guarantee approval.</p></div>
         <div className="content-panel verification-policy">
