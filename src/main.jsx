@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Home, Compass, Users, MessageCircle, Bell, Bookmark, Settings, Plus, Search, Heart, MessageSquare, Repeat2, Send, Image as ImageIcon, Smile, Menu, X, ArrowRight, TrendingUp, MoreHorizontal, UserRound, ShieldCheck, SlidersHorizontal, Hash, Mail, Lock, Eye, EyeOff, ChevronRight, Check, Paperclip, SmilePlus, BarChart3, Megaphone, CircleHelp, LogOut, Globe2, Moon, Shield, Trash2, Archive, Ban, Camera, Pencil, Share2, Flame, Clock, UserPlus, FileText, BookOpen, Bot, ArrowUpRight, ArrowDownToLine, Video, Wallet, Coins, History, Gift } from "lucide-react";
+import { Home, Compass, Users, MessageCircle, Bell, Bookmark, Settings, Plus, Search, Heart, MessageSquare, Repeat2, Send, Image as ImageIcon, Smile, Menu, X, ArrowRight, TrendingUp, MoreHorizontal, UserRound, ShieldCheck, SlidersHorizontal, Hash, Mail, Lock, Eye, EyeOff, ChevronRight, Check, Paperclip, SmilePlus, BarChart3, Megaphone, CircleHelp, LogOut, Globe2, Moon, Shield, Trash2, Archive, Ban, Flag, Camera, Pencil, Share2, Flame, Clock, UserPlus, FileText, BookOpen, Bot, ArrowUpRight, ArrowDownToLine, Video, Wallet, Coins, History, Gift } from "lucide-react";
 import "./index.css";
 
 const API_BASE = "https://gist-up-api.onrender.com";
@@ -74,6 +74,10 @@ function App() {
   const [reportReason, setReportReason] = useState("Spam");
   const [reportDetails, setReportDetails] = useState("");
   const [reportBusy, setReportBusy] = useState(false);
+  const [reportUser, setReportUser] = useState(null);
+  const [reportUserReason, setReportUserReason] = useState("Harassment or bullying");
+  const [reportUserDetails, setReportUserDetails] = useState("");
+  const [reportUserBusy, setReportUserBusy] = useState(false);
   const [postComments, setPostComments] = useState([]);
   const [commentsBusy, setCommentsBusy] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -195,6 +199,8 @@ function App() {
   const [supportBusy, setSupportBusy] = useState(false);
   const [supportRequests, setSupportRequests] = useState([]);
   const [supportInboxBusy, setSupportInboxBusy] = useState(false);
+  const [userReports, setUserReports] = useState([]);
+  const [userReportsBusy, setUserReportsBusy] = useState(false);
   const [moderationAccounts, setModerationAccounts] = useState([]);
   const [moderationQuery, setModerationQuery] = useState("");
   const [moderationBusy, setModerationBusy] = useState(false);
@@ -250,6 +256,30 @@ function App() {
         .catch(error => notify(error.message)).finally(() => setSupportInboxBusy(false));
     }
   }, [settingsTab, isVerificationAdmin]);
+  useEffect(() => {
+    if (!isVerificationAdmin || settingsTab !== "Account reports") return;
+    setUserReportsBusy(true);
+    fetch(API_BASE + "/api/admin/user-reports", { credentials: "include" })
+      .then(async response => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not load account reports.");
+        setUserReports(data.reports || []);
+      })
+      .catch(error => notify(error.message || "Could not load account reports."))
+      .finally(() => setUserReportsBusy(false));
+  }, [settingsTab, isVerificationAdmin]);
+  async function updateUserReportStatus(report, status) {
+    try {
+      const response = await fetch(API_BASE + "/api/admin/user-reports/" + encodeURIComponent(report.id), {
+        method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not update this account report.");
+      setUserReports(items => items.map(item => String(item.id) === String(report.id) ? { ...item, status: data.report?.status || status } : item));
+      notify("Report status updated.");
+    } catch (error) { notify(error.message || "Could not update this account report."); }
+  }
   async function submitSupportRequest() {
     setSupportBusy(true);
     try {
@@ -977,6 +1007,25 @@ function App() {
       setReportBusy(false);
     }
   }
+  async function submitUserReport() {
+    if (!reportUser || reportUserBusy) return;
+    setReportUserBusy(true);
+    try {
+      const response = await fetch(API_BASE + "/api/users/" + encodeURIComponent(reportUser.id) + "/report", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reportUserReason, details: reportUserDetails.trim() })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Couldn't submit this account report.");
+      setReportUser(null);
+      setReportUserDetails("");
+      notify("Thanks. Your account report has been sent for review.");
+    } catch (error) {
+      notify(error?.message || "Couldn't submit this account report.");
+    } finally {
+      setReportUserBusy(false);
+    }
+  }
   async function toggleRepost(post) {
     const wasReposted = reposted.includes(post.id);
     setReposted(old => wasReposted ? old.filter(id => id !== post.id) : [...old, post.id]);
@@ -1293,6 +1342,8 @@ function App() {
           <Avatar initials={profile.initials} size="profile-avatar" imageUrl={profile.avatar_url}/>
           <div className="profile-actions">
             <button className="outline-button" onClick={() => startConversation({id: profile.id})}><MessageCircle size={15}/> Message</button>
+            <button className="outline-button" onClick={() => { setReportUser(person); setReportUserReason("Harassment or bullying"); setReportUserDetails(""); }}><Flag size={15}/> Report</button>
+            <button className="outline-button" onClick={() => { const isBlocked = blocked.some(item => String(item.id) === String(profile.id)); if (isBlocked) { toggleBlock(person, false); } else if (window.confirm("Block " + profile.name + "? They will no longer be able to find your profile or interact with you.")) { toggleBlock(person, true); setSelectedProfile(null); } }}><Ban size={15}/> {blocked.some(item => String(item.id) === String(profile.id)) ? "Unblock" : "Block"}</button>
             <button className={profile.isFollowing ? "outline-button" : "primary-button"} onClick={async () => {
               const updated = await toggleFollow(person);
               if (updated) await openUserProfile(person);
@@ -1379,7 +1430,7 @@ function App() {
     </div>;
   }
   function SettingsPage() {
-    const tabs=["Account","Verification","Privacy","Notifications","Appearance","Blocked accounts","Data & account","Help & Support", ...(isVerificationAdmin ? ["Verification review","Account moderation","Appeals","Support inbox"] : [])];
+    const tabs=["Account","Verification","Privacy","Notifications","Appearance","Blocked accounts","Data & account","Help & Support", ...(isVerificationAdmin ? ["Verification review","Account moderation","Appeals","Support inbox","Account reports"] : [])];
     const notificationOptions=[
       ["notificationsFollowers","New followers","When someone follows your account."],
       ["notificationsEngagement","Likes and comments","When people engage with your posts."],
@@ -1392,7 +1443,8 @@ function App() {
       {settingsTab==="Account moderation"&&isVerificationAdmin&&<div className="verification-review"><p className="muted">Search accounts and choose a proportionate action. Add a clear reason for every warning or restriction. Users can appeal account restrictions.</p><label className="auth-label">Find an account<input value={moderationQuery} onChange={e=>setModerationQuery(e.target.value)} placeholder="Search name, username or email"/></label>
         {moderationBusy?<p className="muted">Loading accounts…</p>:moderationAccounts.filter(a=>!moderationQuery||[a.full_name,a.username,a.email].some(v=>String(v||"").toLowerCase().includes(moderationQuery.toLowerCase()))).map(account=><article className="content-panel moderation-account-card" key={account.id}><div className="section-title"><div><h3>{account.full_name}</h3><span>@{account.username} · {account.email}</span></div><span className={"welcome-pill appeal-status "+account.account_status}>{account.account_status}</span></div>{account.account_status_reason&&<p className="preview-note">{account.account_status_reason}</p>}{account.account_suspension_until&&<small>Until {new Date(account.account_suspension_until).toLocaleString()}</small>}<div className="verification-actions"><button className="outline-button" onClick={()=>moderateAccount(account,"warn")}>Warn</button><button className="outline-button" onClick={()=>moderateAccount(account,"restricted")}>Restrict</button><button className="outline-button" onClick={()=>moderateAccount(account,"suspended")}>Suspend</button><button className="outline-button" onClick={()=>moderateAccount(account,"banned")}>Disable</button>{account.account_status!=="active"&&<button className="primary-button" onClick={()=>moderateAccount(account,"restore")}>Restore</button>}</div></article>)}</div>}
       {settingsTab==="Appeals"&&isVerificationAdmin&&<div className="verification-review">{appealsBusy?<p className="muted">Loading appeals…</p>:accountAppeals.length?accountAppeals.map(item=><article className="content-panel verification-application-card" key={item.id}><div className="section-title"><div><h3>{item.full_name} · @{item.username}</h3><span>{item.email} · Appeal #{item.id}</span></div><span className={"welcome-pill appeal-status "+item.status}>{item.status}</span></div><p>{item.reason}</p><small>Account status when submitted: {item.account_status_at_submission} · {new Date(item.created_at).toLocaleString()}</small>{item.reviewer_note&&<p className="preview-note">Decision note: {item.reviewer_note}</p>}{item.status==="pending"&&<div className="verification-actions"><button className="primary-button" onClick={()=>reviewAccountAppeal(item,"approved")}><Check size={14}/> Approve & restore</button><button className="outline-button" onClick={()=>reviewAccountAppeal(item,"rejected")}>Decline with reason</button></div>}</article>):<div className="empty-state-box"><ShieldCheck size={25}/><strong>No appeals waiting</strong><p>New appeals will appear here.</p></div>}</div>}
-      {settingsTab==="Support inbox"&&isVerificationAdmin&&<div className="verification-review">{supportInboxBusy?<p className="muted">Loading support requests…</p>:supportRequests.length?supportRequests.map(item=><article className="content-panel verification-application-card" key={item.id}><div className="section-title"><div><h3>{item.subject}</h3><span>{item.sender_name} · {item.sender_email}</span></div><span className={"welcome-pill appeal-status "+item.status}>{item.status.replace("_"," ")}</span></div><p><strong>{item.category}</strong></p><p>{item.details}</p><small>Request #{item.id} · {new Date(item.created_at).toLocaleString()}</small><div className="verification-actions"><button className="outline-button" onClick={()=>updateSupportStatus(item,"in_review")}>Mark in review</button><button className="primary-button" onClick={()=>updateSupportStatus(item,"resolved")}>Resolve</button></div></article>):<div className="empty-state-box"><Mail size={25}/><strong>No support requests</strong><p>New messages will appear here.</p></div>}</div>}
+      {settingsTab==="Account reports"&&isVerificationAdmin&&<div className="verification-review">{userReportsBusy?<p className="muted">Loading account reports…</p>:userReports.length?userReports.map(item=><article className="content-panel verification-application-card" key={item.id}><div className="section-title"><div><h3>{item.reported_name} · @{item.reported_username}</h3><span>Reported by {item.reporter_name} · @{item.reporter_username} · Report #{item.id}</span></div><span className={"welcome-pill appeal-status "+item.status}>{item.status}</span></div><p><strong>{item.reason}</strong></p>{item.details&&<p>{item.details}</p>}<small>Submitted {new Date(item.created_at).toLocaleString()}</small><div className="verification-actions">{item.status==="pending"&&<button className="outline-button" onClick={()=>updateUserReportStatus(item,"reviewing")}>Mark reviewing</button>}{item.status!=="resolved"&&<button className="primary-button" onClick={()=>updateUserReportStatus(item,"resolved")}>Resolve</button>}{item.status!=="dismissed"&&<button className="outline-button" onClick={()=>updateUserReportStatus(item,"dismissed")}>Dismiss</button>}</div></article>):<div className="empty-state-box"><Flag size={25}/><strong>No account reports</strong><p>Reports submitted by members will appear here for review.</p></div>}</div>}
+       {settingsTab==="Support inbox"&&isVerificationAdmin&&<div className="verification-review">{supportInboxBusy?<p className="muted">Loading support requests…</p>:supportRequests.length?supportRequests.map(item=><article className="content-panel verification-application-card" key={item.id}><div className="section-title"><div><h3>{item.subject}</h3><span>{item.sender_name} · {item.sender_email}</span></div><span className={"welcome-pill appeal-status "+item.status}>{item.status.replace("_"," ")}</span></div><p><strong>{item.category}</strong></p><p>{item.details}</p><small>Request #{item.id} · {new Date(item.created_at).toLocaleString()}</small><div className="verification-actions"><button className="outline-button" onClick={()=>updateSupportStatus(item,"in_review")}>Mark in review</button><button className="primary-button" onClick={()=>updateSupportStatus(item,"resolved")}>Resolve</button></div></article>):<div className="empty-state-box"><Mail size={25}/><strong>No support requests</strong><p>New messages will appear here.</p></div>}</div>}
       {settingsTab==="Verification"&&<div className="verification-panel">
         <div className="verification-intro"><span className="welcome-pill"><ShieldCheck size={14}/> ACCOUNT AUTHENTICITY</span><h3>Request a verified badge</h3><p>Verification helps people recognise authentic accounts. Applications are reviewed by the Gist-Up team; submitting a request does not guarantee approval.</p></div>
         <div className="content-panel verification-policy">
@@ -1891,6 +1943,7 @@ function App() {
     </nav>
     {composerOpen&&<div className="modal-backdrop" onClick={()=>setComposerOpen(false)}><section className="composer-modal" role="dialog" aria-modal="true" aria-labelledby="composer-title" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2 id="composer-title">Create a post</h2><button className="icon-button" aria-label="Close" onClick={()=>setComposerOpen(false)}><X size={20}/></button></div><div className="modal-user"><Avatar initials={myInitials} size="medium" imageUrl={authUser?.avatar_url}/><div><strong>{displayName} {authUser?.is_verified&&<VerifiedBadge size={14}/>}</strong><span>Sharing with everyone</span></div></div><p className="composer-hint">Share a thought, ask a question, or add a photo or short video.</p><textarea autoFocus value={postText} onChange={e=>setPostText(e.target.value)} placeholder="Write your post here..." aria-label="Write your post" maxLength={5000}/>{postImageData && <div className="post-image-preview"><img src={postImageData} alt="Selected post attachment"/><button className="icon-button" aria-label="Remove selected image" onClick={()=>setPostImageData("")}><X size={16}/></button></div>}{postVideoData && <div className="post-image-preview"><video className="post-video-preview" src={postVideoData} controls playsInline/><button className="icon-button" aria-label="Remove selected video" onClick={()=>setPostVideoData("")}><X size={16}/></button></div>}<div className="composer-media-tools"><label className="outline-button compact image-pick-button"><ImageIcon size={16}/> Add a photo<input type="file" accept="image/*" hidden onChange={e=>handleImagePick(e,"post")}/></label><label className="outline-button compact image-pick-button"><Paperclip size={16}/> Add a video<input type="file" accept="video/mp4,video/webm" hidden onChange={handleVideoPick}/></label><span>Videos: MP4 or WebM, up to 10 MB.</span></div><div className="modal-bottom"><span>{postText.length}/5000</span><button className="primary-button" disabled={(!postText.trim()&&!postImageData&&!postVideoData)||postBusy} onClick={publish}>{postBusy?"Publishing…":"Publish post"} <ArrowRight size={16}/></button></div><p className="preview-note">Your post will be saved to your Gist Up account.</p></section></div>}
     {reportPost&&<div className="modal-backdrop" onClick={()=>setReportPost(null)}><section className="composer-modal edit-modal" role="dialog" aria-modal="true" aria-labelledby="report-title" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2 id="report-title">Report post</h2><button className="icon-button" aria-label="Close report dialog" onClick={()=>setReportPost(null)}><X size={20}/></button></div><p className="muted">Tell us why this post may violate Gist Up's community guidelines. Reports are saved for review.</p><label className="auth-label">Reason<select value={reportReason} onChange={e=>setReportReason(e.target.value)}><option>Spam</option><option>Harassment or bullying</option><option>Hate or abuse</option><option>False information</option><option>Other</option></select></label><label className="auth-label">Additional details (optional)<textarea value={reportDetails} onChange={e=>setReportDetails(e.target.value)} maxLength={500} placeholder="Share any context that may help the review."/></label><button className="primary-button auth-main-btn" onClick={submitReport} disabled={reportBusy}>{reportBusy?"Sending report…":"Submit report"} <ArrowRight size={16}/></button></section></div>}
+    {reportUser&&<div className="modal-backdrop" onClick={()=>setReportUser(null)}><section className="composer-modal edit-modal" role="dialog" aria-modal="true" aria-labelledby="report-user-title" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2 id="report-user-title">Report account</h2><button className="icon-button" aria-label="Close report dialog" onClick={()=>setReportUser(null)}><X size={20}/></button></div><p className="muted">Tell us why this account may violate Gist Up's community guidelines. Reports are saved for review.</p><label className="auth-label">Reason<select value={reportUserReason} onChange={e=>setReportUserReason(e.target.value)}><option>Spam</option><option>Harassment or bullying</option><option>Hate or abuse</option><option>Impersonation</option><option>Other</option></select></label><label className="auth-label">Additional details (optional)<textarea value={reportUserDetails} onChange={e=>setReportUserDetails(e.target.value)} maxLength={500} placeholder="Share any context that may help the review."/></label><button className="primary-button auth-main-btn" onClick={submitUserReport} disabled={reportUserBusy}>{reportUserBusy?"Sending report…":"Submit report"} <ArrowRight size={16}/></button></section></div>}
     {commentPost!==null&&<div className="modal-backdrop" onClick={()=>setCommentPost(null)}><section className="composer-modal" role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2>Comments</h2><button className="icon-button" onClick={()=>setCommentPost(null)}><X size={20}/></button></div><p className="muted">Comments are saved to this post.</p><div className="post-comments-list">{commentsBusy?<p className="muted">Loading comments…</p>:postComments.length?postComments.map(comment=><div className="saved-comment" key={comment.id}><strong>{comment.full_name || comment.username}</strong><p>{comment.content}</p><small>{new Date(comment.created_at).toLocaleString()}</small></div>):<p className="muted">No comments yet. Start the conversation.</p>}</div><div className="comment-input"><input value={commentText} onChange={e=>setCommentText(e.target.value)} maxLength={2000} placeholder="Write a comment…"/><button className="primary-button" onClick={submitComment} disabled={!commentText.trim()}><Send size={15}/></button></div></section></div>}
     {editProfile&&<div className="modal-backdrop" onClick={()=>setEditProfile(false)}><section className="composer-modal edit-modal" role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()}><div className="modal-heading"><h2>Edit profile</h2><button className="icon-button" onClick={()=>setEditProfile(false)}><X size={20}/></button></div><label className="auth-label">Display name<input value={displayName} onChange={e=>setDisplayName(e.target.value)} maxLength={50}/></label><label className="auth-label">Username<input value={handle} onChange={e=>setHandle(e.target.value.startsWith("@")?e.target.value:"@"+e.target.value)} maxLength={30}/></label><label className="auth-label">Bio<textarea value={profileBio} onChange={e=>setProfileBio(e.target.value)} maxLength={160}/></label><div className="image-edit-row"><div className="image-edit-preview"><Avatar initials={myInitials} size="medium" imageUrl={avatarImageData || authUser?.avatar_url}/><span>Profile picture</span></div><label className="outline-button compact image-pick-button"><Camera size={14}/> Choose picture<input type="file" accept="image/*" hidden onChange={e=>handleImagePick(e,"avatar")}/></label></div>{coverImageData && <p className="preview-note">New cover photo selected. Save changes to apply it.</p>}{avatarImageData && <p className="preview-note">New profile picture selected. Save changes to apply it.</p>}<button className="primary-button auth-main-btn" onClick={saveProfile}><Check size={16}/> Save changes</button><p className="preview-note">Your display name, username, and bio will be saved to your account.</p></section></div>}
   </div>;
