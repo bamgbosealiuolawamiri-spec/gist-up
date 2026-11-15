@@ -96,6 +96,13 @@ function App() {
   const [messageBusy, setMessageBusy] = useState(false);
   const [settingsTab, setSettingsTab] = useState("Account");
   const [authMode, setAuthMode] = useState("welcome");
+  const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get("reset") || "");
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetNewPassword, setResetNewPassword] = useState("");
+  const [resetConfirmPassword, setResetConfirmPassword] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetMessage, setResetMessage] = useState("");
+  const [resetError, setResetError] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
@@ -537,6 +544,47 @@ function App() {
     const timer = window.setTimeout(() => searchMessageUsers(messageSearch), 250);
     return () => window.clearTimeout(timer);
   }, [showNewMessage, messageSearch]);
+
+
+  async function requestPasswordReset() {
+    setResetError(""); setResetMessage("");
+    if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(resetEmail.trim())) {
+      setResetError("Enter a valid email address."); return;
+    }
+    setResetBusy(true);
+    try {
+      const response = await fetch(API_BASE + "/api/auth/forgot-password", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: resetEmail.trim().toLowerCase() })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "We couldn't request a reset link.");
+      setResetMessage(result.message || "If an account exists for that email, a reset link will be sent shortly.");
+    } catch (error) {
+      setResetError(error?.message || "We couldn't request a reset link. Please try again.");
+    } finally { setResetBusy(false); }
+  }
+
+  async function submitPasswordReset() {
+    setResetError(""); setResetMessage("");
+    if (resetNewPassword.length < 8) { setResetError("Your new password must be at least 8 characters."); return; }
+    if (resetNewPassword !== resetConfirmPassword) { setResetError("The passwords don't match."); return; }
+    setResetBusy(true);
+    try {
+      const response = await fetch(API_BASE + "/api/auth/reset-password", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: resetToken, newPassword: resetNewPassword })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "This reset link is invalid or has expired.");
+      setResetMessage(result.message || "Your password has been reset. You can now log in.");
+      setResetNewPassword(""); setResetConfirmPassword(""); setResetToken("");
+      window.history.replaceState({}, "", window.location.pathname);
+      setAuthMode("login");
+    } catch (error) {
+      setResetError(error?.message || "We couldn't reset your password. Please request a new link.");
+    } finally { setResetBusy(false); }
+  }
 
   async function submitAuth() {
     setAuthError("");
@@ -1488,7 +1536,7 @@ function App() {
     </section></div>;
   }
   function AuthPage() {
-    return <div className="auth-shell"><div className="auth-left"><button className="brand auth-brand" onClick={()=>setAuthMode("welcome")}><span className="brand-mark"><img src="/gist-up-mark.svg" alt="" /></span><span>gist<span className="brand-up">up</span></span></button><div className="auth-promo"><span className="welcome-pill">YOUR PEOPLE. YOUR STORIES.</span><h1>A little more connection.<br/><span>A lot more you.</span></h1><p>Share your story, discover new perspectives, and find the people who make your world feel bigger.</p><div className="auth-floating-card"><div className="mini-avatars"><i>M</i><i>D</i><i>A</i></div><strong>Real people. Shared moments.</strong><small>Your next favourite conversation is out there.</small></div></div><div className="auth-foot">Made for the stories that bring us together. · © 2026 Gist Up</div></div><div className="auth-right"><div className="auth-form-wrap">{authMode==="welcome"?<><div className="auth-mobile-logo"><span className="brand-mark"><img src="/gist-up-mark.svg" alt="" /></span> gist<span className="brand-up">up</span></div><span className="eyebrow">WELCOME TO GIST UP</span><h2>Your people are here.</h2><p>Join conversations, share what matters, and make your space your own.</p><button className="primary-button auth-main-btn" onClick={()=>setAuthMode("signup")}>Create your account <ArrowRight size={17}/></button><button className="google-button" onClick={()=>notify("Google sign-in is not connected in this preview.")}><span className="google-g">G</span> Continue with Google</button><div className="auth-separator"><span>or</span></div><button className="outline-button auth-main-btn" onClick={()=>setAuthMode("login")}>Log in</button><button className="text-button preview-entry" onClick={()=>setAuthMode("app")}>Explore the website preview <ArrowRight size={15}/></button><small>By continuing, you agree to our Terms and Privacy Policy.</small></>:<><button className="back-link" onClick={()=>setAuthMode("welcome")}>← Back</button><span className="eyebrow">{authMode==="signup"?"GET STARTED":"WELCOME BACK"}</span><h2>{authMode==="signup"?"Create your account":"Log in to Gist Up"}</h2><p>{authMode==="signup"?"A few details and you're on your way.":"Your people and conversations are waiting."}</p>{authMode==="signup"&&<label className="auth-label">Full name<input value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="Your full name"/></label>}<label className="auth-label">Email address<input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/></label><label className="auth-label">Password<span className="password-input"><input type={showPassword?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 characters"/><button onClick={()=>setShowPassword(!showPassword)} type="button" aria-label="Show password">{showPassword?<EyeOff size={17}/>:<Eye size={17}/>}</button></span></label><button className="primary-button auth-main-btn" onClick={submitAuth} disabled={authBusy}>{authBusy ? "Please wait…" : authMode==="signup" ? "Create account" : "Log in"} <ArrowRight size={16}/></button>{authError && <p className="auth-error" role="alert">{authError}</p>}<div className="auth-switch">{authMode==="signup"?"Already have an account?":"New to Gist Up?"} <button onClick={()=>setAuthMode(authMode==="signup"?"login":"signup")}>{authMode==="signup"?"Log in":"Create an account"}</button></div><small>"Your account is protected by the Gist Up account service."</small></>}</div></div></div>;
+    return <div className="auth-shell"><div className="auth-left"><button className="brand auth-brand" onClick={()=>setAuthMode("welcome")}><span className="brand-mark"><img src="/gist-up-mark.svg" alt="" /></span><span>gist<span className="brand-up">up</span></span></button><div className="auth-promo"><span className="welcome-pill">YOUR PEOPLE. YOUR STORIES.</span><h1>A little more connection.<br/><span>A lot more you.</span></h1><p>Share your story, discover new perspectives, and find the people who make your world feel bigger.</p><div className="auth-floating-card"><div className="mini-avatars"><i>M</i><i>D</i><i>A</i></div><strong>Real people. Shared moments.</strong><small>Your next favourite conversation is out there.</small></div></div><div className="auth-foot">Made for the stories that bring us together. · © 2026 Gist Up</div></div><div className="auth-right"><div className="auth-form-wrap">{authMode==="forgot"?<><button className="back-link" onClick={()=>{setAuthMode("login");setResetError("");setResetMessage("");}}>← Back to log in</button><span className="eyebrow">ACCOUNT RECOVERY</span><h2>Forgot your password?</h2><p>Enter the email address linked to your Gist-Up account. We'll send a secure reset link if an account matches.</p><label className="auth-label">Email address<input type="email" value={resetEmail} onChange={e=>setResetEmail(e.target.value)} placeholder="you@example.com"/></label><button className="primary-button auth-main-btn" onClick={requestPasswordReset} disabled={resetBusy}>{resetBusy?"Sending…":"Send reset link"} <ArrowRight size={16}/></button>{resetMessage&&<p className="preview-note" role="status">{resetMessage}</p>}{resetError&&<p className="auth-error" role="alert">{resetError}</p>}</>:authMode==="reset"?<><span className="eyebrow">ACCOUNT RECOVERY</span><h2>Choose a new password</h2><p>Your reset link is valid for 30 minutes and can only be used once.</p><label className="auth-label">New password<input type="password" autoComplete="new-password" value={resetNewPassword} onChange={e=>setResetNewPassword(e.target.value)} placeholder="At least 8 characters"/></label><label className="auth-label">Confirm new password<input type="password" autoComplete="new-password" value={resetConfirmPassword} onChange={e=>setResetConfirmPassword(e.target.value)} placeholder="Enter your new password again"/></label><button className="primary-button auth-main-btn" onClick={submitPasswordReset} disabled={resetBusy||!resetNewPassword||!resetConfirmPassword}>{resetBusy?"Updating…":"Reset password"} <Lock size={16}/></button>{resetMessage&&<p className="preview-note" role="status">{resetMessage}</p>}{resetError&&<p className="auth-error" role="alert">{resetError}</p>}</>:null} : authMode==="welcome"?<><div className="auth-mobile-logo"><span className="brand-mark"><img src="/gist-up-mark.svg" alt="" /></span> gist<span className="brand-up">up</span></div><span className="eyebrow">WELCOME TO GIST UP</span><h2>Your people are here.</h2><p>Join conversations, share what matters, and make your space your own.</p><button className="primary-button auth-main-btn" onClick={()=>setAuthMode("signup")}>Create your account <ArrowRight size={17}/></button><button className="google-button" onClick={()=>notify("Google sign-in is not connected in this preview.")}><span className="google-g">G</span> Continue with Google</button><div className="auth-separator"><span>or</span></div><button className="outline-button auth-main-btn" onClick={()=>setAuthMode("login")}>Log in</button><button className="text-button preview-entry" onClick={()=>setAuthMode("app")}>Explore the website preview <ArrowRight size={15}/></button><small>By continuing, you agree to our Terms and Privacy Policy.</small></>:<><button className="back-link" onClick={()=>setAuthMode("welcome")}>← Back</button><span className="eyebrow">{authMode==="signup"?"GET STARTED":"WELCOME BACK"}</span><h2>{authMode==="signup"?"Create your account":"Log in to Gist Up"}</h2><p>{authMode==="signup"?"A few details and you're on your way.":"Your people and conversations are waiting."}</p>{authMode==="signup"&&<label className="auth-label">Full name<input value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="Your full name"/></label>}<label className="auth-label">Email address<input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/></label><label className="auth-label">Password<span className="password-input"><input type={showPassword?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 characters"/><button onClick={()=>setShowPassword(!showPassword)} type="button" aria-label="Show password">{showPassword?<EyeOff size={17}/>:<Eye size={17}/>}</button></span></label>{authMode==="login"&&<button type="button" className="text-button" onClick={()=>{setResetEmail(email);setResetError("");setResetMessage("");setAuthMode("forgot");}}>Forgot password?</button>}<button className="primary-button auth-main-btn" onClick={submitAuth} disabled={authBusy}>{authBusy ? "Please wait…" : authMode==="signup" ? "Create account" : "Log in"} <ArrowRight size={16}/></button>{authError && <p className="auth-error" role="alert">{authError}</p>}<div className="auth-switch">{authMode==="signup"?"Already have an account?":"New to Gist Up?"} <button onClick={()=>setAuthMode(authMode==="signup"?"login":"signup")}>{authMode==="signup"?"Log in":"Create an account"}</button></div><small>"Your account is protected by the Gist Up account service."</small></>}</div></div></div>;
   }
   if (authMode!=="app") return <>{AuthPage()}{notice&&<div className="toast" role="status">{notice}</div>}</>;
   async function prepareLiveCamera() {
