@@ -654,7 +654,7 @@ app.get("/api/health", async (_req, res) => {
 app.post("/api/auth/forgot-password", authLimiter, async (req, res) => {
   if (!requireConfig(res)) return;
   const email = String(req.body?.email || "").trim().toLowerCase();
-  if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email) || email.length > 254) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
     return res.status(400).json({ error: "Enter a valid email address." });
   }
   const genericMessage = "If an account exists for that email, a password reset link will be sent shortly.";
@@ -667,13 +667,13 @@ app.post("/api/auth/forgot-password", authLimiter, async (req, res) => {
         "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '30 minutes')",
         [found.rows[0].id, tokenHash]
       );
-      const webUrl = String(process.env.GISTUP_WEB_URL || "https://gist-up.onrender.com").replace(/\\/$/, "");
+      const webUrl = String(process.env.GISTUP_WEB_URL || "https://gist-up.onrender.com").replace(/\/$/, "");
       const resetUrl = webUrl + "/?reset=" + encodeURIComponent(rawToken);
       try {
         await sendAppEmail({
           to: email,
           subject: "Reset your Gist-Up password",
-          text: "Hello " + (found.rows[0].full_name || "there") + ",\\n\\nWe received a request to reset your Gist-Up password. Use the secure link below within 30 minutes:\\n\\n" + resetUrl + "\\n\\nIf you did not request this, you can ignore this email. Your password will not change.\\n\\nFor your security, never share this link with anyone."
+          text: "Hello " + (found.rows[0].full_name || "there") + ",\n\nWe received a request to reset your Gist-Up password. Use the secure link below within 30 minutes:\n\n" + resetUrl + "\n\nIf you did not request this, you can ignore this email. Your password will not change.\n\nFor your security, never share this link with anyone."
         });
       } catch (emailError) {
         console.error("Password reset email could not be sent:", emailError?.message || "unknown error");
