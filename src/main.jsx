@@ -548,7 +548,7 @@ function App() {
 
   async function requestPasswordReset() {
     setResetError(""); setResetMessage("");
-    if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(resetEmail.trim())) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resetEmail.trim())) {
       setResetError("Enter a valid email address."); return;
     }
     setResetBusy(true);
@@ -581,6 +581,7 @@ function App() {
       setResetNewPassword(""); setResetConfirmPassword(""); setResetToken("");
       window.history.replaceState({}, "", window.location.pathname);
       setAuthMode("login");
+      notify("Your password has been reset. You can now log in.");
     } catch (error) {
       setResetError(error?.message || "We couldn't reset your password. Please request a new link.");
     } finally { setResetBusy(false); }
