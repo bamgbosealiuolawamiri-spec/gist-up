@@ -7,7 +7,7 @@ import jwt from "jsonwebtoken";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 
 const { Pool } = pg;
 const app = express();
@@ -648,6 +648,78 @@ app.get("/api/health", async (_req, res) => {
     service: "Gist Up API",
     database
   });
+});
+
+
+app.post("/api/auth/forgot-password", authLimiter, async (req, res) => {
+  if (!requireConfig(res)) return;
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+    return res.status(400).json({ error: "Enter a valid email address." });
+  }
+  const genericMessage = "If an account exists for that email, a password reset link will be sent shortly.";
+  try {
+    const found = await pool.query("SELECT id, full_name FROM users WHERE email = $1 LIMIT 1", [email]);
+    if (found.rowCount) {
+      const rawToken = randomBytes(32).toString("hex");
+      const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+      await pool.query(
+        "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '30 minutes')",
+        [found.rows[0].id, tokenHash]
+      );
+      const webUrl = String(process.env.GISTUP_WEB_URL || "https://gist-up.onrender.com").replace(/\/$/, "");
+      const resetUrl = webUrl + "/?reset=" + encodeURIComponent(rawToken);
+      try {
+        await sendAppEmail({
+          to: email,
+          subject: "Reset your Gist-Up password",
+          text: "Hello " + (found.rows[0].full_name || "there") + ",\n\nWe received a request to reset your Gist-Up password. Use the secure link below within 30 minutes:\n\n" + resetUrl + "\n\nIf you did not request this, you can ignore this email. Your password will not change.\n\nFor your security, never share this link with anyone."
+        });
+      } catch (emailError) {
+        console.error("Password reset email could not be sent:", emailError?.message || "unknown error");
+      }
+    }
+    return res.json({ ok: true, message: genericMessage });
+  } catch (error) {
+    console.error("Password reset request failed:", error?.message || "unknown error");
+    return res.json({ ok: true, message: genericMessage });
+  }
+});
+
+app.post("/api/auth/reset-password", authLimiter, async (req, res) => {
+  if (!requireConfig(res)) return;
+  const token = String(req.body?.token || "");
+  const newPassword = String(req.body?.newPassword || "");
+  if (!/^[a-f0-9]{64}$/i.test(token)) return res.status(400).json({ error: "This reset link is invalid or has expired. Request a new one." });
+  if (newPassword.length < 8 || newPassword.length > 128) return res.status(400).json({ error: "Your new password must be between 8 and 128 characters." });
+  try {
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const found = await client.query(
+        "SELECT id, user_id FROM password_reset_tokens WHERE token_hash = $1 AND expires_at > NOW() AND used_at IS NULL FOR UPDATE",
+        [tokenHash]
+      );
+      if (!found.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "This reset link is invalid or has expired. Request a new one." });
+      }
+      const passwordHash = await bcrypt.hash(newPassword, 12);
+      await client.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, found.rows[0].user_id]);
+      await client.query("UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL", [found.rows[0].user_id]);
+      await client.query("COMMIT");
+      return res.json({ ok: true, message: "Your password has been reset. You can now log in." });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error("Password reset failed:", error?.message || "unknown error");
+    return res.status(500).json({ error: "We couldn't reset your password right now. Please try again." });
+  }
 });
 
 app.post("/api/auth/signup", authLimiter, async (req, res) => {
@@ -2067,6 +2139,18 @@ async function start() {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+          id BIGSERIAL PRIMARY KEY,
+          user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token_hash CHAR(64) NOT NULL UNIQUE,
+          expires_at TIMESTAMPTZ NOT NULL,
+          used_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await pool.query("CREATE INDEX IF NOT EXISTS password_reset_tokens_user_idx ON password_reset_tokens (user_id, created_at DESC)");
       await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(30)");
       await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS bio VARCHAR(160) NOT NULL DEFAULT ''");
       await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT");
