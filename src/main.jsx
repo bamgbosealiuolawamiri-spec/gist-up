@@ -4,6 +4,7 @@ import { Home, Compass, Users, MessageCircle, Bell, Bookmark, Settings, Plus, Se
 import "./index.css";
 
 const API_BASE = "https://gist-up-api.onrender.com";
+const hasPasswordResetToken = new URLSearchParams(window.location.search).has("reset");
 
 const seedPosts = [
   { id: 1, name: "Maya Johnson", handle: "@mayaj", time: "18 min ago", initials: "MJ", tone: "lavender", text: "Small reminder: your progress doesn't have to look like anyone else's. Keep showing up for the things that matter to you. 💜", likes: 128, comments: 24, topic: "Lifestyle" },
@@ -95,7 +96,7 @@ function App() {
   const [showArchived, setShowArchived] = useState(false);
   const [messageBusy, setMessageBusy] = useState(false);
   const [settingsTab, setSettingsTab] = useState("Account");
-  const [authMode, setAuthMode] = useState(() => new URLSearchParams(window.location.search).has("reset") ? "reset" : "welcome");
+  const [authMode, setAuthMode] = useState(() => hasPasswordResetToken ? "reset" : "welcome");
   const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get("reset") || "");
   const [resetEmail, setResetEmail] = useState("");
   const [resetNewPassword, setResetNewPassword] = useState("");
@@ -515,6 +516,12 @@ function App() {
 
   useEffect(() => {
     let mounted = true;
+    // A password-reset URL must take priority over an existing signed-in session.
+    // Otherwise the session check redirects the user away from the new-password form.
+    if (hasPasswordResetToken) {
+      setAuthMode("reset");
+      return () => { mounted = false; };
+    }
     fetch(API_BASE + "/api/auth/me", { credentials: "include" })
       .then(async response => response.ok ? (await response.json()).user : null)
       .then(async user => {
