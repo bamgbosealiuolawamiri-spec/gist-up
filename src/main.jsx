@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { Home, Compass, Users, MessageCircle, Bell, Bookmark, Settings, Plus, Search, Heart, MessageSquare, Repeat2, Send, Image as ImageIcon, Smile, Menu, X, ArrowRight, TrendingUp, MoreHorizontal, UserRound, ShieldCheck, SlidersHorizontal, Hash, Mail, Lock, Eye, EyeOff, ChevronRight, Check, Paperclip, SmilePlus, BarChart3, Megaphone, CircleHelp, LogOut, Globe2, Moon, Shield, Trash2, Archive, Ban, Flag, Camera, Pencil, Share2, Flame, Clock, UserPlus, FileText, BookOpen, Bot, ArrowUpRight, ArrowDownToLine, Video, Wallet, Coins, History, Gift } from "lucide-react";
 import "./index.css";
 
-const API_BASE = "https://gist-up-api.onrender.com";
+// Route API calls through the website origin so session cookies are first-party on Render.\n// Render static-site rule required: /api/* -> https://gist-up-api.onrender.com/api/* (Rewrite).\nconst API_BASE = "";
 const hasPasswordResetToken = new URLSearchParams(window.location.search).has("reset");
 
 const seedPosts = [
